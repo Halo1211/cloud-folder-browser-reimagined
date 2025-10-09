@@ -1,7 +1,9 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Policy;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
@@ -10,6 +12,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using WebDAVClient;
 using Exception = System.Exception;
+using SeasideResearch.LibCurlNet;
 
 namespace CloudFolderBrowser
 {
@@ -24,8 +27,7 @@ namespace CloudFolderBrowser
 
         public string UserAgent = "";
 
-        public bool ValidateFileSize = false;
-
+        public bool ValidateFileSize = false;       
 
         public async Task<List<CloudFile>> GetMissingFiles(List<CloudFolder> checkedFolders, List<CloudFolder> mixedFolders, string syncFolderPath, bool ignoreExistingFiles, bool validateFileSize)
         {
@@ -324,7 +326,7 @@ namespace CloudFolderBrowser
         }
 
 
-        public IClient webdavClient;
+        public Client webdavClient;
         string allsyncUrl = "https://allsync.com";
         public string allsyncRootFolderAddress = "";
         public Dictionary<string, string> savedPasswords = new Dictionary<string, string>();
@@ -397,7 +399,7 @@ namespace CloudFolderBrowser
                 else
                     CreateUpdateWebdavClient(folderKey, "null");
 
-                items = (await webdavClient.ListShared(CloudPublicFolder.Path, 999))?.ToArray();
+                items = (await webdavClient.ListSharedCurl(CloudPublicFolder.Path, 999))?.ToArray();
                 if (items == null)
                 progress?.Report(1);
             }
@@ -495,7 +497,7 @@ namespace CloudFolderBrowser
         {           
             try
             {
-                var items = await webdavClient.ListShared(CloudPublicFolder.Path, 1);
+                var items = await webdavClient.ListSharedCurl(CloudPublicFolder.Path, 1);
                 if (items.Count() > 0)
                     return true;                
             }

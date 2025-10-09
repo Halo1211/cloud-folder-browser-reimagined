@@ -1,21 +1,22 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Security;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using SeasideResearch.LibCurlNet;
 using WebDAVClient.Helpers;
-using System.Net.Http;
 using WebDAVClient.HttpClient;
 using WebDAVClient.Model;
-using System.Collections;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.StartPanel;
-using System.Security.Authentication;
 
 namespace WebDAVClient
 {
@@ -310,7 +311,187 @@ namespace WebDAVClient
                 if (response != null)
                     response.Dispose();
             }
-        }       
+        }
+
+        public async Task<IEnumerable<Item>> ListSharedCurl(string path = "/", int? depth = 1)
+        {
+            Uri listUri = new Uri($"{Server}{BasePath}");
+
+            Curl.GlobalInit((int)CURLinitFlag.CURL_GLOBAL_ALL);
+
+            // Depth header: http://webdav.org/specs/rfc4918.html#rfc.section.9.1.4
+            Slist headers = new(); // Use SList for header management
+            if (depth != null)
+            {
+                headers.Append($"Depth: {depth.ToString()}");
+            }
+            if (CustomHeaders != null)
+            {
+                foreach (var keyValuePair in CustomHeaders)
+                {
+                    headers.Append($"{keyValuePair.Key}: {keyValuePair.Value}");
+                }
+            }
+
+            string svcCredentials = Convert.ToBase64String(Encoding.ASCII.GetBytes(Credentials.UserName + ":" + Credentials.Password));
+
+            headers.Append("Authorization: Basic " + svcCredentials);
+
+            
+            Easy easy = new Easy();
+            
+            StringBuilder responseData = new StringBuilder();
+            string curlCipherList =
+                "ECDHE-RSA-AES256-GCM-SHA384:" +
+                "ECDHE-ECDSA-AES256-GCM-SHA384:" +
+                "ECDHE-RSA-AES256-SHA384:" +
+                "ECDHE-ECDSA-AES256-SHA384:" +
+                "ECDHE-RSA-AES256-SHA:" +
+                "ECDHE-ECDSA-AES256-SHA:" +
+                "DHE-RSA-AES256-GCM-SHA384:" +
+                "DHE-RSA-AES256-SHA256:" +
+                "DHE-RSA-AES256-SHA:" +
+                "ECDHE-ECDSA-CHACHA20-POLY1305:" + // OpenSSL short name
+                "ECDHE-RSA-CHACHA20-POLY1305:" +   // OpenSSL short name
+                "DHE-RSA-CHACHA20-POLY1305:" +     // OpenSSL short name
+                "DHE-RSA-CAMELLIA256-SHA256:" +
+                "DHE-RSA-CAMELLIA256-SHA:" +
+                "RSA-AES256-GCM-SHA384:" +
+                "RSA-AES256-SHA256:" +
+                "RSA-AES256-SHA:" +
+                "RSA-CAMELLIA256-SHA256:" +
+                "RSA-CAMELLIA256-SHA:" +
+                "ECDHE-RSA-AES128-GCM-SHA256:" +
+                "ECDHE-ECDSA-AES128-GCM-SHA256:" +
+                "ECDHE-RSA-AES128-SHA256:" +
+                "ECDHE-ECDSA-AES128-SHA256:" +
+                "ECDHE-RSA-AES128-SHA:" +
+                "ECDHE-ECDSA-AES128-SHA:" +
+                "DHE-RSA-AES128-GCM-SHA256:" +
+                "DHE-RSA-AES128-SHA256:" +
+                "DHE-RSA-AES128-SHA:" +
+                "DHE-RSA-CAMELLIA128-SHA256:" +
+                "DHE-RSA-CAMELLIA128-SHA:" +
+                "RSA-AES128-GCM-SHA256:" +
+                "RSA-AES128-SHA256:" +
+                "RSA-AES128-SHA:" +
+                "RSA-CAMELLIA128-SHA256:" +
+                "RSA-CAMELLIA128-SHA:" +
+                "ECDHE-RSA-RC4-SHA:" +
+                "ECDHE-ECDSA-RC4-SHA:" +
+                "RSA-RC4-SHA:" +
+                "ECDHE-RSA-DES-CBC3-SHA:" + // 3DES is DES-CBC3-SHA in OpenSSL
+                "ECDHE-ECDSA-DES-CBC3-SHA:" +
+                "DHE-RSA-DES-CBC3-SHA:" +
+                "DES-CBC3-SHA";
+
+            try
+            {
+                // ----------------------------------------------------
+                // 1. Basic Request Configuration 
+                // ----------------------------------------------------
+                easy.SetOpt(CURLoption.CURLOPT_URL, listUri.ToString());
+                easy.SetOpt(CURLoption.CURLOPT_SSL_VERIFYPEER, false);
+                easy.SetOpt(CURLoption.CURLOPT_SSLVERSION, CURLsslVersion.CURL_SSLVERSION_TLSv1);
+
+                // Set the write function to capture the response body
+                Easy.WriteFunction wf = new Easy.WriteFunction(OnWriteData);
+                easy.SetOpt(CURLoption.CURLOPT_WRITEFUNCTION, wf);
+                easy.SetOpt(CURLoption.CURLOPT_WRITEDATA, responseData);
+
+                // ----------------------------------------------------
+                // 2. WebDAV Method and Body Setup
+                // ----------------------------------------------------
+
+                // A. Set the PROPFIND method (non-standard HTTP verb)
+                easy.SetOpt(CURLoption.CURLOPT_CUSTOMREQUEST, "PROPFIND");
+
+                // B. Set the XML Request Body
+                //byte[] bodyBytes = Encoding.UTF8.GetBytes(PropfindBody);
+
+                // NOTE: LibCurlNet often prefers pointers/handles for PostFields, 
+                // but string/byte array works if the wrapper handles conversion.
+                // Using the string overload for simplicity here:
+                //easy.SetOpt(CURLoption.CURLOPT_POSTFIELDS, PropfindBody);
+                //easy.SetOpt(CURLoption.CURLOPT_POSTFIELDSIZE, bodyBytes.Length);            
+
+                // Apply the header list to the request
+                easy.SetOpt(CURLoption.CURLOPT_HTTPHEADER, headers);               
+
+                // Set a known browser-like cipher list to change the Ja3 fingerprint.
+                easy.SetOpt(CURLoption.CURLOPT_SSL_CIPHER_LIST, curlCipherList);
+               
+                easy.SetOpt(CURLoption.CURLOPT_USERAGENT, UserAgent);
+
+                // ----------------------------------------------------
+                // 5. Execution
+                // ----------------------------------------------------
+
+                CURLcode curlResult = CURLcode.CURLE_COULDNT_CONNECT;
+
+                await Task.Run(() => { curlResult = easy.Perform(); });
+
+                if (curlResult != CURLcode.CURLE_OK)
+                {
+                    throw new WebDAVException((int)curlResult, "Failed retrieving items in folder.");                   
+                }
+                else
+                {                                                 
+                    int httpCode = 0;
+                    easy.GetInfo(CURLINFO.CURLINFO_RESPONSE_CODE, ref httpCode);
+                    var res = responseData.ToString();
+
+                    var items = ResponseParser.ParseItems(res);
+
+                    if (items == null)
+                    {
+                        throw new WebDAVException("Failed deserializing data returned from server.");
+                    }
+
+                    var listUrl = listUri.ToString();
+
+                    var result = new List<Item>(items.Count());
+                    foreach (var item in items)
+                    {
+                        // If it's not a collection, add it to the result
+                        if (!item.IsCollection)
+                        {
+                            result.Add(item);
+                        }
+                        else
+                        {
+                            // If it's not the requested parent folder, add it to the result                            
+                            if (!string.Equals(item.Href.ToString(), "/public.php/webdav/", StringComparison.CurrentCultureIgnoreCase))
+                            {
+                                result.Add(item);
+                            }
+                        }
+                    }
+                    return result;
+                }
+            }
+            finally
+            {
+                // Cleanup resources
+                if (easy != null) easy.Dispose();
+                if (headers != null) headers.FreeAll();
+            }          
+        }
+
+        static Int32 OnWriteData(Byte[] buf, Int32 size, Int32 nmemb, Object extraData)
+        {
+            // extraData is cast back to the StringBuilder object
+            StringBuilder sb = extraData as StringBuilder;
+
+            if (sb != null)
+            {
+                // Note: size * nmemb is the actual length of the data chunk (buf)
+                string data = System.Text.Encoding.UTF8.GetString(buf, 0, size * nmemb);
+                sb.Append(data);
+            }
+
+            return size * nmemb;
+        }
 
         /// <summary>
         /// List all files present on the server.

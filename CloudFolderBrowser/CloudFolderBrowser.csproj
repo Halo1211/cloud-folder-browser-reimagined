@@ -69,6 +69,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\GitHub\MegaApiClient\MegaApiClient\MegaApiClient.csproj" />
+    <ProjectReference Include="..\..\libcurl.NET-master\src\libcurl.NET.csproj" />
     <ProjectReference Include="..\Aga.Controls\Aga.Controls.csproj">
       <Project>{e73bb233-d88b-44a7-a98f-d71ee158381d}</Project>
       <Name>Aga.Controls</Name>
