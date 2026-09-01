@@ -1,15 +1,14 @@
-<p align="center">
+<div align="center">
   <img src="CloudFolderBrowser/Assets/cloud-browser-icon.png" width="144" alt="Cloud Folder Browser Reimagined logo">
-</p>
-
-# Cloud Folder Browser Reimagined
-
-A Windows desktop application for browsing public cloud folders, comparing them with local storage, and downloading only what is needed.
-
-[![Version](https://img.shields.io/badge/version-1.0.0-D6A15B)](https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest)
-[![Build](https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml/badge.svg)](https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-20201D)](LICENSE)
-[![Windows](https://img.shields.io/badge/platform-Windows%20x64-20201D)](#requirements)
+  <h1>Cloud Folder Browser Reimagined</h1>
+  <p>A Windows desktop application for browsing public cloud folders, comparing them with local storage, and downloading only what is needed.</p>
+  <p>
+    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.0-D6A15B" alt="Version 1.0.0"></a>
+    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml"><img src="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-20201D" alt="GPL-3.0 license"></a>
+    <a href="#requirements"><img src="https://img.shields.io/badge/platform-Windows%20x64-20201D" alt="Windows x64"></a>
+  </p>
+</div>
 
 ![Main window](docs/screenshots/main-window.png)
 
