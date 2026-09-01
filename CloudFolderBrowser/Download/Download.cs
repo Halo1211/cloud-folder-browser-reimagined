@@ -3,11 +3,24 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using CloudFolderBrowser.Sync;
 
 namespace CloudFolderBrowser
 {
     public abstract class Download : IDownload
     {
+        internal DownloadHistoryStore HistoryStore { get; }
+
+        internal ChecksumManifestStore ChecksumStore { get; }
+
+        protected Download(
+            DownloadHistoryStore? historyStore = null,
+            ChecksumManifestStore? checksumStore = null)
+        {
+            HistoryStore = historyStore ?? DownloadHistoryStore.Default;
+            ChecksumStore = checksumStore ?? ChecksumManifestStore.Default;
+        }
+
         public List<IFileDownload> Downloads { get; set; }
 
         protected readonly Queue<IFileDownload> DownloadQueue = new Queue<IFileDownload>();

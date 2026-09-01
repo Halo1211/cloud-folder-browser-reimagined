@@ -11,7 +11,7 @@ using System.Windows.Forms;
 
 namespace CloudFolderBrowser
 {
-    public partial class LoginForm : Form
+    public partial class LoginForm : Theming.ThemedForm
     {
         MainForm parentForm;
 
@@ -30,9 +30,12 @@ namespace CloudFolderBrowser
 
         private void login_webBrowser_Navigated(object sender, WebBrowserNavigatedEventArgs e)
         {
-            if (login_webBrowser.Url.AbsoluteUri.Contains("https://oauth.yandex.ru/verification_code#access_token="))
+            string? absoluteUrl = login_webBrowser.Url?.AbsoluteUri;
+            if (absoluteUrl?.Contains("https://oauth.yandex.ru/verification_code#access_token=") == true)
             {
-                var m = Regex.Match(login_webBrowser.Url.AbsoluteUri, "#access_token=(.+?)&");
+                var m = Regex.Match(absoluteUrl, "#access_token=([^&]+)");
+                if (!m.Success)
+                    return;
                 var accessToken = m.Groups[1].Value;
                 Properties.Settings.Default.accessTokenYandex = accessToken;
                 Properties.Settings.Default.Save();

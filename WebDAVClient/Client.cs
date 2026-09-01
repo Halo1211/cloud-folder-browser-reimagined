@@ -5,14 +5,12 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using SeasideResearch.LibCurlNet;
 using WebDAVClient.Helpers;
 using WebDAVClient.HttpClient;
 using WebDAVClient.Model;
@@ -35,8 +33,8 @@ namespace WebDAVClient
         // http://webdav.org/specs/rfc4918.html#METHOD_PROPFIND
         private const string PropFindRequestContent =
             "<?xml version=\"1.0\" encoding=\"utf-8\" ?>" +
-            "<D:propfind xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:oc=\"http://owncloud.org/ns\" xmlns:nc=\"http://nextcloud.org/ns\" xmlns:ocs=\"http://open-collaboration-services.org/ns\">" +
-            "<D:allprop/>" +
+            "<d:propfind xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:oc=\"http://owncloud.org/ns\" xmlns:nc=\"http://nextcloud.org/ns\" xmlns:ocs=\"http://open-collaboration-services.org/ns\">" +
+            "<d:allprop/>" +
             //"  <propname/>" +
             //"  <prop>" +
             //"    <creationdate/>" +
@@ -47,7 +45,7 @@ namespace WebDAVClient
             //"    <getetag/>" +
             //"    <resourcetype/>" +
             //"  </prop> " +
-            "</D:propfind>";
+            "</d:propfind>";
 
         private static readonly string AssemblyVersion = typeof (IClient).Assembly.GetName().Version.ToString();
 
@@ -125,7 +123,7 @@ namespace WebDAVClient
                 handler.Proxy = proxy;
             if (handler.SupportsAutomaticDecompression)
                 handler.AutomaticDecompression = DecompressionMethods.Deflate | DecompressionMethods.GZip;
-            handler.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls11 | SslProtocols.Tls13 | SslProtocols.Ssl2 | SslProtocols.Ssl3;
+            handler.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
             if (credential != null)
             {
                 handler.Credentials = credential;
@@ -313,7 +311,15 @@ namespace WebDAVClient
             }
         }
 
-        public async Task<IEnumerable<Item>> ListSharedCurl(string path = "/", int? depth = 1)
+        // Compatibility alias for older callers. The managed WebDAV request is
+        // sufficient for AllSync and avoids a native libcurl dependency.
+        public Task<IEnumerable<Item>> ListSharedCurl(string path = "/", int? depth = 1)
+        {
+            return ListShared(path, depth);
+        }
+
+#if false
+        public async Task<IEnumerable<Item>> ListSharedCurlLegacy(string path = "/", int? depth = 1)
         {
             Uri listUri = new Uri($"{Server}{BasePath}");
 
@@ -492,6 +498,7 @@ namespace WebDAVClient
 
             return size * nmemb;
         }
+#endif
 
         /// <summary>
         /// List all files present on the server.

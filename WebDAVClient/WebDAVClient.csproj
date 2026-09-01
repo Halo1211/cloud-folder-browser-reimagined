@@ -1,11 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net6.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>annotations</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WevDAVClient</AssemblyName>
+    <!-- This bundled compatibility client still exposes legacy WebRequest APIs. -->
+    <NoWarn>$(NoWarn);SYSLIB0014;SYSLIB0051</NoWarn>
   </PropertyGroup>
 
 
@@ -28,7 +30,4 @@
     <WarningLevel>4</WarningLevel>
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\..\libcurl.NET-master\src\libcurl.NET.csproj" />
-  </ItemGroup>
 </Project>

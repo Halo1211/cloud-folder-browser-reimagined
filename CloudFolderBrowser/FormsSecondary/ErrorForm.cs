@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 namespace CloudFolderBrowser
 {
-    public partial class ErrorForm : Form
+    public partial class ErrorForm : Theming.ThemedForm
     {
         public ErrorForm(string title, string message)
         {

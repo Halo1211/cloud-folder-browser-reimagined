@@ -74,6 +74,9 @@ namespace YandexDiskSharp
         /// <exception cref="ArgumentOutOfRangeException">Значение, указанное для операции задания, меньше или равно нулю и не равно <see cref="System.Threading.Timeout.Infinite"/></exception>
         public int ReadWriteTimeout { get; set; }
 
+        /// <summary>Proxy used for API requests. Null uses the operating-system default.</summary>
+        public IWebProxy Proxy { get; set; }
+
         #endregion
 
         #region ~Methods~
@@ -85,6 +88,8 @@ namespace YandexDiskSharp
             result.Headers["Authorization"] = $"OAuth {AccessToken}";
             result.Timeout = Timeout;
             result.ReadWriteTimeout = ReadWriteTimeout;
+            if (Proxy != null)
+                result.Proxy = Proxy;
             //result.Proxy = new WebProxy("93.92.204.173", Port:3128);
             //string g = result.ToString();
             return result;
@@ -97,6 +102,8 @@ namespace YandexDiskSharp
             //result.Headers["Authorization"] = $"OAuth {AccessToken}";
             result.Timeout = Timeout;
             result.ReadWriteTimeout = ReadWriteTimeout;
+            if (Proxy != null)
+                result.Proxy = Proxy;
             //result.Proxy = new WebProxy("93.92.204.173", Port:3128);
             //string g = result.ToString();
             return result;

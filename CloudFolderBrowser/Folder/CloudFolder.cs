@@ -138,6 +138,9 @@ namespace CloudFolderBrowser
 
         public void SaveToJson()
         {
+            if (string.IsNullOrWhiteSpace(OriginalString))
+                throw new InvalidOperationException("A source URL is required before the folder list can be saved.");
+
             var appPath = Directory.GetCurrentDirectory();
             Directory.CreateDirectory($"{appPath}\\jsons");
             string hashString = Utility.GetHashString(OriginalString);            
@@ -147,7 +150,7 @@ namespace CloudFolderBrowser
             }));
         }        
 
-        public async Task<CloudFolder> LoadFromJson(bool checkStatus = false)
+        public Task<CloudFolder?> LoadFromJson(bool checkStatus = false)
         {
             var cloudFolder = new CloudFolder();
             var appPath = Directory.GetCurrentDirectory();            
@@ -162,11 +165,11 @@ namespace CloudFolderBrowser
                     cloudFolder = JsonConvert.DeserializeObject<CloudFolder>(jsonString, new JsonSerializerSettings()
                     {
                         TypeNameHandling = TypeNameHandling.Auto
-                    });                    
-                    return cloudFolder;
+                    }) ?? new CloudFolder();
+                    return Task.FromResult<CloudFolder?>(cloudFolder);
                 }
             }
-            return null;
+            return Task.FromResult<CloudFolder?>(null);
         }
 
         

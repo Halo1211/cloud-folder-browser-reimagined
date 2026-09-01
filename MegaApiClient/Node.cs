@@ -197,13 +197,14 @@
   }
 
   [DebuggerDisplay("PublicNode - Type: {Type} - Name: {Name} - Id: {Id}")]
-  internal class PublicNode : INode, INodeCrypto
+  public class PublicNode : INode, INodeCrypto
   {
     private readonly Node node;
 
-    public PublicNode(Node node, string shareId)
+    public PublicNode(INode node, string shareId)
     {
-      this.node = node;
+      this.node = node as Node
+        ?? throw new ArgumentException("PublicNode can only wrap a MEGA node returned by this client.", nameof(node));
       this.ShareId = shareId;
     }
 

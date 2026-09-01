@@ -139,31 +139,35 @@ namespace YandexDiskSharp.Models
 
         #region ~IList~
 
-        Resource IList<Resource>.this[int index] { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        Resource IList<Resource>.this[int index]
+        {
+            get => items[index];
+            set => throw new NotSupportedException("The resource list is read-only.");
+        }
 
         void ICollection<Resource>.Add(Resource item)
         {
-            throw new NotImplementedException();
+            throw new NotSupportedException("The resource list is read-only.");
         }
 
         void ICollection<Resource>.Clear()
         {
-            throw new NotImplementedException();
+            throw new NotSupportedException("The resource list is read-only.");
         }
 
         void IList<Resource>.Insert(int index, Resource item)
         {
-            throw new NotImplementedException();
+            throw new NotSupportedException("The resource list is read-only.");
         }
 
         bool ICollection<Resource>.Remove(Resource item)
         {
-            throw new NotImplementedException();
+            throw new NotSupportedException("The resource list is read-only.");
         }
 
         void IList<Resource>.RemoveAt(int index)
         {
-            throw new NotImplementedException();
+            throw new NotSupportedException("The resource list is read-only.");
         }
 
         #endregion

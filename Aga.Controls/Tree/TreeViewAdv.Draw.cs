@@ -158,8 +158,8 @@ namespace Aga.Controls.Tree
 				}
 			}
 
-            if ((GridLineStyle & GridLineStyle.Horizontal) == GridLineStyle.Horizontal)
-				e.Graphics.DrawLine(SystemPens.InactiveBorder, 0, rowRect.Bottom, e.Graphics.ClipBounds.Right, rowRect.Bottom);
+			if ((GridLineStyle & GridLineStyle.Horizontal) == GridLineStyle.Horizontal)
+				e.Graphics.DrawLine(_linePen, 0, rowRect.Bottom, e.Graphics.ClipBounds.Right, rowRect.Bottom);
 
 			if (ShowLines)
 				DrawLines(e.Graphics, node, rowRect);
@@ -175,7 +175,7 @@ namespace Aga.Controls.Tree
 				if (c.IsVisible)
 				{
 					x += c.Width;
-					gr.DrawLine(SystemPens.InactiveBorder, x - 1, y, x - 1, gr.ClipBounds.Bottom);
+					gr.DrawLine(_linePen, x - 1, y, x - 1, gr.ClipBounds.Bottom);
 				}
 			}
 		}
@@ -236,8 +236,9 @@ namespace Aga.Controls.Tree
 		{
 			Rectangle r1 = DisplayRectangle;
 			Rectangle r2 = ClientRectangle;
-			gr.FillRectangle(SystemBrushes.Control,
-				new Rectangle(r1.Right, r1.Bottom, r2.Width - r1.Width, r2.Height - r1.Height));
+			using (Brush brush = new SolidBrush(BackColor))
+				gr.FillRectangle(brush,
+					new Rectangle(r1.Right, r1.Bottom, r2.Width - r1.Width, r2.Height - r1.Height));
 		}
 
 		private void DrawDropMark(Graphics gr)

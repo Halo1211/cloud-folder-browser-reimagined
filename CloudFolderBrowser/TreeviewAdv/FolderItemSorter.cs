@@ -7,8 +7,8 @@ namespace CloudFolderBrowser
 {
 	public class FolderItemSorter : IComparer
 	{
-		private string _mode;
-		private SortOrder _order;
+		private readonly string _mode;
+		private readonly SortOrder _order;
 
 		public FolderItemSorter(string mode, SortOrder order)
 		{
@@ -16,11 +16,14 @@ namespace CloudFolderBrowser
 			_order = order;
 		}
 
-		public int Compare(object x, object y)
-		{            
-            //string g = x.GetType().ToString();
-            ColumnNode a = (ColumnNode) x;
-            ColumnNode b = (ColumnNode) y;
+		public int Compare(object? x, object? y)
+		{
+            if (ReferenceEquals(x, y))
+                return 0;
+            if (x is not ColumnNode a)
+                return -1;
+            if (y is not ColumnNode b)
+                return 1;
 
             if ((a.Tag == null || a.Tag.GetType().ToString() == "CloudFolderBrowser.CloudFolder") && (b.Tag != null && b.Tag.GetType().ToString() != "CloudFolderBrowser.CloudFolder"))
                 return -1;
@@ -29,29 +32,28 @@ namespace CloudFolderBrowser
 
             int res = 0;
 
-			if (_mode == "Created")
-				res = DateTime.Compare(DateTime.Parse(a.NodeControl2), DateTime.Parse(b.NodeControl2));
+			if (_mode == "Created"
+                && DateTime.TryParse(a.NodeControl2, out DateTime createdA)
+                && DateTime.TryParse(b.NodeControl2, out DateTime createdB))
+				res = DateTime.Compare(createdA, createdB);
             if (_mode == "Modified")
-                res = DateTime.Compare(DateTime.Parse(a.NodeControl3), DateTime.Parse(b.NodeControl3));
+            {
+                if (DateTime.TryParse(a.NodeControl3, out DateTime modifiedA)
+                    && DateTime.TryParse(b.NodeControl3, out DateTime modifiedB))
+                    res = DateTime.Compare(modifiedA, modifiedB);
+            }
             if (_mode == "Size")
             {
-                if (Double.Parse(a.NodeControl4.Replace(" MB", "")) < Double.Parse(b.NodeControl4.Replace(" MB", "")))
-                    res = -1;
-                else if (Double.Parse(a.NodeControl4.Replace(" MB", "")) > Double.Parse(b.NodeControl4.Replace(" MB", "")))
-                    res = 1;
+                double.TryParse(a.NodeControl4.Replace(" MB", ""), out double sizeA);
+                double.TryParse(b.NodeControl4.Replace(" MB", ""), out double sizeB);
+                res = sizeA.CompareTo(sizeB);
             }
             if (_mode == "Name")
-                res = string.Compare(a.NodeControl1, b.NodeControl1);
+                res = string.Compare(a.NodeControl1, b.NodeControl1, StringComparison.CurrentCultureIgnoreCase);
 
 			if (_order == SortOrder.Ascending)
-				return -res;
-			else
 				return res;
-		}
-
-		private string GetData(object x)
-		{
-			return (x as ColumnNode).NodeControl1;
+			return -res;
 		}
 	}
 }

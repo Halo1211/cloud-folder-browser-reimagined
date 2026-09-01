@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Drawing;
 using System.Windows.Forms;
+using CloudFolderBrowser.Theming;
 
 //https://github.com/ukushu/TextProgressBar
 namespace CloudFolderBrowser
@@ -16,13 +17,14 @@ namespace CloudFolderBrowser
         TextAndCurrProgress
     }
 
-    public class TextProgressBar : ProgressBar
+    public class TextProgressBar : ThemedProgressBar
     {
-        [Description("Font of the text on ProgressBar"), Category("Additional Options")]
+        [Description("Font of the text on ProgressBar"), Category("Additional Options"),
+         DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public Font TextFont { get; set; } = new Font(FontFamily.GenericSerif, 11, FontStyle.Bold | FontStyle.Italic);
 
-        private SolidBrush _textColourBrush = (SolidBrush)Brushes.Black;
-        [Category("Additional Options")]
+        private SolidBrush _textColourBrush = new(Color.Black);
+        [Category("Additional Options"), DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public Color TextColor
         {
             get
@@ -33,26 +35,13 @@ namespace CloudFolderBrowser
             {
                 _textColourBrush.Dispose();
                 _textColourBrush = new SolidBrush(value);
-            }
-        }
-
-        private SolidBrush _progressColourBrush = (SolidBrush)Brushes.LightGreen;
-        [Category("Additional Options"), Browsable(true), EditorBrowsable(EditorBrowsableState.Always)]
-        public Color ProgressColor
-        {
-            get
-            {
-                return _progressColourBrush.Color;
-            }
-            set
-            {
-                _progressColourBrush.Dispose();
-                _progressColourBrush = new SolidBrush(value);
+                Invalidate();
             }
         }
 
         private ProgressBarDisplayMode _visualMode = ProgressBarDisplayMode.CurrProgress;
-        [Category("Additional Options"), Browsable(true)]
+        [Category("Additional Options"), Browsable(true),
+         DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public ProgressBarDisplayMode VisualMode
         {
             get
@@ -68,7 +57,9 @@ namespace CloudFolderBrowser
 
         private string _text = string.Empty;
 
-        [Description("If it's empty, % will be shown"), Category("Additional Options"), Browsable(true), EditorBrowsable(EditorBrowsableState.Always)]
+        [Description("If it's empty, % will be shown"), Category("Additional Options"), Browsable(true),
+         EditorBrowsable(EditorBrowsableState.Always),
+         DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public string CustomText
         {
             get
@@ -109,7 +100,15 @@ namespace CloudFolderBrowser
             set { }
         }
 
-        private string _percentageStr { get { return $"{(int)((float)Value - Minimum) / ((float)Maximum - Minimum) * 100} %"; } }
+        private string _percentageStr
+        {
+            get
+            {
+                int range = Maximum - Minimum;
+                int percentage = range <= 0 ? 0 : (int)((float)(Value - Minimum) / range * 100);
+                return $"{percentage} %";
+            }
+        }
 
         private string _currProgressStr
         {
@@ -122,37 +121,12 @@ namespace CloudFolderBrowser
         public TextProgressBar()
         {
             Value = Minimum;
-            FixComponentBlinking();
-        }
-
-        private void FixComponentBlinking()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
-
-            DrawProgressBar(g);
-
-            DrawStringIfNeeded(g);
-        }
-
-        private void DrawProgressBar(Graphics g)
-        {
-            Rectangle rect = ClientRectangle;
-
-            ProgressBarRenderer.DrawHorizontalBar(g, rect);
-
-            rect.Inflate(-3, -3);
-
-            if (Value > 0)
-            {
-                Rectangle clip = new Rectangle(rect.X, rect.Y, (int)Math.Round(((float)Value / Maximum) * rect.Width), rect.Height);
-
-                g.FillRectangle(_progressColourBrush, clip);
-            }
+            base.OnPaint(e);
+            DrawStringIfNeeded(e.Graphics);
         }
 
         private void DrawStringIfNeeded(Graphics g)
@@ -166,15 +140,15 @@ namespace CloudFolderBrowser
 
                 Point location = new Point(((Width / 2) - (int)len.Width / 2), ((Height / 2) - (int)len.Height / 2));
 
-                g.DrawString(text, TextFont, (Brush)_textColourBrush, location);
+                g.DrawString(text, TextFont, _textColourBrush, location);
             }
         }
 
-        public new void Dispose()
+        protected override void Dispose(bool disposing)
         {
-            _textColourBrush.Dispose();
-            _progressColourBrush.Dispose();
-            base.Dispose();
+            if (disposing)
+                _textColourBrush.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

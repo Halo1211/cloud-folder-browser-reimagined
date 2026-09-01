@@ -377,6 +377,69 @@
         }
 
         /// <summary>
+        /// Import a selected set of nodes from a public folder into the account.
+        /// </summary>
+        public IEnumerable<INode> ImportNodes(INode[] nodes, INode parent = null)
+        {
+            if (nodes == null || nodes.Length == 0)
+            {
+                throw new ArgumentException("At least one node is required.", "nodes");
+            }
+
+            if (parent == null)
+            {
+                parent = this.GetNodes().Single(n => n.Type == NodeType.Root);
+            }
+
+            if (parent.Type == NodeType.File)
+            {
+                throw new ArgumentException("Invalid parent node", "parent");
+            }
+
+            this.EnsureLoggedIn();
+
+            if (nodes.Length == 1 && nodes[0].ParentId == null)
+            {
+                Node node = nodes[0] as Node
+                    ?? throw new ArgumentException("Node was not created by this MEGA client.", "nodes");
+                byte[] attributes = Crypto.EncryptAttributes(new Attributes(node.Name, node.Attributes), node.Key);
+                byte[] encryptedKey = Crypto.EncryptKey(node.FullKey, this.masterKey);
+                ImportNodeRequest request = ImportNodeRequest.ImportFileNodeRequest(
+                    parent.Id,
+                    attributes.ToBase64(),
+                    encryptedKey.ToBase64(),
+                    node.Id);
+                return this.Request<GetNodesResponse>(request, this.masterKey).Nodes;
+            }
+
+            ImportFolderNodeRequest folderRequest = ImportFolderNodeRequest.ImportFolderRequest(parent.Id);
+            foreach (INode publicNode in nodes)
+            {
+                Node node = publicNode as Node
+                    ?? throw new ArgumentException("Node was not created by this MEGA client.", "nodes");
+                byte[] attributes = Crypto.EncryptAttributes(new Attributes(node.Name, node.Attributes), node.Key);
+                byte[] key = node.Type == NodeType.Directory ? node.Key : node.FullKey;
+                byte[] encryptedKey = Crypto.EncryptKey(key, this.masterKey);
+
+                bool parentIsImported = publicNode.ParentId != null && nodes.Any(x => x.Id == publicNode.ParentId);
+                ImportFolderNodeRequest.ImportFolderNodeRequestData requestNode = parentIsImported
+                    ? new ImportFolderNodeRequest.ImportFolderFileNodeRequestData
+                    {
+                        ParentId = publicNode.ParentId
+                    }
+                    : new ImportFolderNodeRequest.ImportFolderNodeRequestData();
+
+                requestNode.Attributes = attributes.ToBase64();
+                requestNode.Key = encryptedKey.ToBase64();
+                requestNode.Type = publicNode.Type;
+                requestNode.PublicLinkId = publicNode.Id;
+                folderRequest.Nodes.Add(requestNode);
+            }
+
+            return this.Request<GetNodesResponse>(folderRequest, this.masterKey).Nodes;
+        }
+
+        /// <summary>
         /// Retrieve an url to download specified node
         /// </summary>
         /// <param name="node">Node to retrieve the download link (only <see cref="NodeType.File" /> or <see cref="NodeType.Directory" /> can be downloaded)</param>
@@ -789,7 +852,7 @@
 
                         int chunkSize = chunksSizesToUpload[i];
                         byte[] chunkBuffer = new byte[chunkSize];
-                        encryptedStream.Read(chunkBuffer, 0, chunkSize);
+                        encryptedStream.ReadExactly(chunkBuffer, 0, chunkSize);
 
                         using (MemoryStream chunkStream = new MemoryStream(chunkBuffer))
                         {

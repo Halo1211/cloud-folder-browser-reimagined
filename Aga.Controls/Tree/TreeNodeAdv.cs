@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Runtime.Serialization;
-using System.Security.Permissions;
 
 namespace Aga.Controls.Tree
 {
@@ -449,12 +448,11 @@ namespace Aga.Controls.Tree
 
 		}
 
-		[SecurityPermission(SecurityAction.Demand, SerializationFormatter = true)]
 		public void GetObjectData(SerializationInfo info, StreamingContext context)
 		{
 			info.AddValue("IsExpanded", IsExpanded);
 			info.AddValue("NodesCount", Nodes.Count);
-			if ((Tag != null) && Tag.GetType().IsSerializable)
+			if ((Tag != null) && Tag.GetType().IsDefined(typeof(SerializableAttribute), inherit: false))
 				info.AddValue("Tag", Tag, Tag.GetType());
 
 			for (int i = 0; i < Nodes.Count; i++)

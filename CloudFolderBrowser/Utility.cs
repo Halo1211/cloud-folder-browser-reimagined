@@ -8,18 +8,82 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 using HtmlAgilityPack;
+using CloudFolderBrowser.Providers;
 
 namespace CloudFolderBrowser
 {
     internal static class Utility
     {
+        public static string GetApplicationDataDirectory()
+        {
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CloudFolderBrowser");
+            Directory.CreateDirectory(directory);
+            return directory;
+        }
+
         static public string GetSafePathName(string name)
         {
-            string safeName = name;
+            string safeName = name ?? string.Empty;
             foreach (var ch in Path.GetInvalidFileNameChars())
                 safeName = safeName.Replace(ch, '_');           
-            safeName = safeName.TrimEnd();
+            safeName = safeName.TrimEnd(' ', '.');
+
+            if (string.IsNullOrWhiteSpace(safeName))
+                safeName = "_";
+
+            string baseName = safeName.Split('.')[0];
+            string[] reservedNames =
+            {
+                "CON", "PRN", "AUX", "NUL",
+                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+            };
+            if (reservedNames.Contains(baseName, StringComparer.OrdinalIgnoreCase))
+                safeName = "_" + safeName;
+
             return safeName;
+        }
+
+        public static string GetSafeDownloadPath(string rootPath, string cloudPath)
+        {
+            if (string.IsNullOrWhiteSpace(rootPath))
+                throw new ArgumentException("A download root folder is required.", nameof(rootPath));
+            if (string.IsNullOrWhiteSpace(cloudPath))
+                throw new ArgumentException("A cloud file path is required.", nameof(cloudPath));
+
+            string rootFullPath = Path.GetFullPath(rootPath);
+            string[] segments = cloudPath
+                .Replace('\\', '/')
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
+                throw new InvalidDataException($"Unsafe cloud file path: {cloudPath}");
+
+            string relativePath = Path.Combine(segments
+                .Select(segment => GetSafePathName(Uri.UnescapeDataString(segment)))
+                .ToArray());
+            string destination = Path.GetFullPath(Path.Combine(rootFullPath, relativePath));
+            string rootPrefix = rootFullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            if (!destination.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Cloud file path escapes the download folder: {cloudPath}");
+
+            return destination;
+        }
+
+        public static string ApplyFileNameOverride(string cloudPath, string? fileNameOverride)
+        {
+            if (string.IsNullOrWhiteSpace(fileNameOverride))
+                return cloudPath;
+
+            string normalized = cloudPath.Replace('\\', '/');
+            int separator = normalized.LastIndexOf('/');
+            return separator >= 0
+                ? normalized[..(separator + 1)] + GetSafePathName(fileNameOverride)
+                : GetSafePathName(fileNameOverride);
         }
 
         static public string[] ParsePath(string path, bool includeFilename = false)
@@ -29,7 +93,7 @@ namespace CloudFolderBrowser
 
             MatchCollection matches = Regex.Matches(path, pattern);
             if (matches.Count == 0)
-                return null;
+                return Array.Empty<string>();
             string[] folderNames = new string[matches.Count];
 
             for (int i = 0; i < folderNames.Length; i++)
@@ -46,75 +110,58 @@ namespace CloudFolderBrowser
 
         }
 
-        public static async Task<string> GetFinalRedirect(string url, string userAgent)
+        public static async Task<string?> GetFinalRedirect(string url, string userAgent)
         {
-            ServicePointManager.ServerCertificateValidationCallback = (s, cert, chain, ssl) => true;
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls13;
-            
             if (string.IsNullOrWhiteSpace(url))
                 return url;
 
-            int maxRedirCount = 5;  // prevent infinite loops
-            string newUrl = url;
-            do
-            {
-                HttpWebRequest req = null;
-                HttpWebResponse resp = null;
-                SocketsHttpHandler webRequestHandler = new SocketsHttpHandler();
-                webRequestHandler.AllowAutoRedirect = false;
-                HttpClient httpClient = new HttpClient(webRequestHandler);
-                httpClient.DefaultRequestVersion = HttpVersion.Version20;
-                httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var currentUri))
+                return null;
 
+            using var webRequestHandler = Networking.AppHttpClientFactory.CreateHandler(
+                allowAutoRedirect: false,
+                routeKey: "Other");
+            using var httpClient = new HttpClient(webRequestHandler)
+            {
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+                "User-Agent",
+                string.IsNullOrWhiteSpace(userAgent) ? "CloudFolderBrowser/1.0" : userAgent);
+
+            const int maxRedirects = 5;
+            for (int redirectCount = 0; redirectCount <= maxRedirects; redirectCount++)
+            {
                 try
                 {
-
-                    HttpResponseMessage responseMessage = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                    using HttpResponseMessage responseMessage = await httpClient.GetAsync(
+                        currentUri,
+                        HttpCompletionOption.ResponseHeadersRead);
 
                     switch (responseMessage.StatusCode)
                     {
                         case HttpStatusCode.OK:
-                            return newUrl;
+                            return currentUri.AbsoluteUri;
                         case HttpStatusCode.Redirect:
                         case HttpStatusCode.MovedPermanently:
                         case HttpStatusCode.RedirectKeepVerb:
                         case HttpStatusCode.RedirectMethod:
-                            newUrl = responseMessage.Headers.Location.ToString();
-                            if (newUrl == null)
-                                return url;
-
-                            if (newUrl.IndexOf("://", StringComparison.Ordinal) == -1)
-                            {
-                                // Doesn't have a URL Schema, meaning it's a relative or absolute URL
-                                Uri u = new Uri(new Uri(url), newUrl);
-                                newUrl = u.ToString();
-                            }
+                            Uri? location = responseMessage.Headers.Location;
+                            if (location == null)
+                                return currentUri.AbsoluteUri;
+                            currentUri = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
                             break;
                         default:
-                            return newUrl;
+                            return currentUri.AbsoluteUri;
                     }
-                    url = newUrl;
                 }
-                catch (WebException ex)
-                {
-                    // Return the last known good URL
-                    return newUrl;
-                }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
                     return null;
                 }
-                finally
-                {
-                    if (resp != null)
-                        resp.Close();
-                }
             }
-            while (
-            (newUrl.ToLower().Contains("rebrand.ly")) &&
-            maxRedirCount-- > 0);
 
-            return newUrl;
+            return currentUri.AbsoluteUri;
         }
 
         static byte[] GetHash(string inputString)
@@ -148,18 +195,9 @@ namespace CloudFolderBrowser
 
         public static CloudServiceType GetCloudServiceType(string url)
         {
-            if (url.Contains("yadi.sk"))
-                return CloudServiceType.Yadisk;
-            if (url.Contains(".allsync.com"))
-                return CloudServiceType.Allsync;
-            if (url.Contains("efss.qloud."))
-                return CloudServiceType.QCloud;
-            if (url.Contains("mega.nz"))
-                return CloudServiceType.Mega;
-            if (url.Contains("thetrove.is"))
-                return CloudServiceType.TheTrove;
-            if (url.Contains("h5ailink"))
-                return CloudServiceType.h5ai;
+            ICloudProviderDescriptor? provider = CloudProviderRegistry.Default.Resolve(url);
+            if (provider != null)
+                return provider.ServiceType;
 
             //using (var webpage = new WebClient())
             //{

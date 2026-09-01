@@ -20,9 +20,9 @@ namespace YandexDiskSharp.Utilities
                 using (var jsonReader = new JsonTextReader(new StreamReader(ex.Response.GetResponseStream())) { CloseInput = true })
                     throw new DiskException(new Models.Exception(jsonReader), ex, ex.Status, ex.Response);
             }
-            catch (System.Exception ex)
+            catch (System.Exception)
             {
-                throw ex;
+                throw;
             }
         }
         

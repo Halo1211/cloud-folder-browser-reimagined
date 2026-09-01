@@ -19,10 +19,7 @@ namespace CloudFolderBrowser
             get => _name;
             set
             {
-                if (value.EndsWith("."))
-                    _name = value.Remove(value.Length - 1, 1);
-                else
-                    _name = value;
+                _name = (value ?? string.Empty).TrimEnd(' ', '.');
             }
         }
         public string Path { get; set; }
@@ -32,8 +29,8 @@ namespace CloudFolderBrowser
 
         public void CalculateFolderSize()
         {
-            Size += SizeTopDirectoryOnly;
-            FilesNumber += FilesNumberTopDirectoryOnly;
+            Size = SizeTopDirectoryOnly;
+            FilesNumber = FilesNumberTopDirectoryOnly;
 
             foreach (IFolder subfolder in Subfolders)
             {

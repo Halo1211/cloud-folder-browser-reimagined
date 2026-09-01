@@ -1,4 +1,35 @@
-bin/
-obj/
-packages/
+# .NET and Visual Studio
+**/bin/
+**/obj/
 .vs/
+packages/
+TestResults/
+*.user
+*.suo
+*.cache
+
+# Build, publish, and diagnostic output
+.build/
+artifacts/
+*.dmp
+*.pdb
+*.log
+download-log-*.txt
+
+# Local application data
+portable.config
+accounts.json
+download-history.json
+*.cfbackup
+*.part
+*.segments.json
+
+# Local release assets are uploaded through GitHub Releases
+release/*
+!release/README.md
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

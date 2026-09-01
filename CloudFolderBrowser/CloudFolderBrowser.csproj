@@ -2,47 +2,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
+    <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <AssemblyTitle>Cloud Folder Browser Reimagined</AssemblyTitle>
+    <Product>Cloud Folder Browser Reimagined</Product>
+    <Title>Cloud Folder Browser Reimagined</Title>
+    <Description>A multi-cloud browser, sync planner, and resilient download manager for Windows.</Description>
+    <Authors>Halo1211 and contributors</Authors>
+    <RepositoryUrl>https://github.com/Halo1211/cloud-folder-browser-reimagined</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
-  
-  <PropertyGroup>
-    <BeautySharedRuntimeMode>False</BeautySharedRuntimeMode>
-    <!-- beauty into sub-directory, default is libs, quote with "" if contains space  -->
-    <BeautyLibsDir Condition="$(BeautySharedRuntimeMode) == 'True'">../libraries</BeautyLibsDir>
-    <BeautyLibsDir Condition="$(BeautySharedRuntimeMode) != 'True'">./libraries</BeautyLibsDir>
-    <!-- dlls that you don't want to be moved or can not be moved -->
-    <!-- <BeautyExcludes>dll1.dll;lib*;...</BeautyExcludes> -->
-    <!-- dlls that end users never needed, so hide them -->
-    <!-- <BeautyHiddens>hostfxr;hostpolicy;*.deps.json;*.runtimeconfig*.json</BeautyHiddens> -->
-    <!-- set to True if you want to disable -->
-    <DisableBeauty>False</DisableBeauty>
-    <!-- set to False if you want to beauty on build -->
-    <BeautyOnPublishOnly>False</BeautyOnPublishOnly>
-    <!-- set to True if you want to allow 3rd debuggers(like dnSpy) debugs the app -->
-    <BeautyEnableDebugging>False</BeautyEnableDebugging>
-    <!-- the patch can reduce the file count -->
-    <!-- set to False if you want to disable -->
-    <!-- SCD Mode Feature Only -->
-    <BeautyUsePatch>True</BeautyUsePatch>
-    <!-- App Entry Dll = BeautyDir + BeautyAppHostDir + BeautyAppHostEntry -->
-    <!-- see https://github.com/nulastudio/NetBeauty2#customize-apphost for more details -->
-    <!-- relative path based on AppHostDir -->
-    <!-- .NET Core Non Single-File Only -->
-    <!-- <BeautyAppHostEntry>bin/MyApp.dll</BeautyAppHostEntry> -->
-    <!-- relative path based on BeautyDir -->
-    <!-- .NET Core Non Single-File Only -->
-    <!-- <BeautyAppHostDir>..</BeautyAppHostDir> -->
-    <!-- <BeautyAfterTasks></BeautyAfterTasks> -->
-    <!-- valid values: Error|Detail|Info -->
-    <BeautyLogLevel>Info</BeautyLogLevel>
-    <!-- set to a repo mirror if you have troble in connecting github -->
-    <!-- <BeautyGitCDN>https://gitee.com/liesauer/HostFXRPatcher</BeautyGitCDN> -->
-    <!-- <BeautyGitTree>master</BeautyGitTree> -->
-  </PropertyGroup>
-  
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
     <DebugSymbols>true</DebugSymbols>
@@ -65,11 +42,10 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>icon.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\cloud-browser-modern.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\..\GitHub\MegaApiClient\MegaApiClient\MegaApiClient.csproj" />
-    <ProjectReference Include="..\..\libcurl.NET-master\src\libcurl.NET.csproj" />
+    <ProjectReference Include="..\MegaApiClient\MegaApiClient.csproj" />
     <ProjectReference Include="..\Aga.Controls\Aga.Controls.csproj">
       <Project>{e73bb233-d88b-44a7-a98f-d71ee158381d}</Project>
       <Name>Aga.Controls</Name>
@@ -84,14 +60,12 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <Content Include="icon.ico" />
+    <EmbeddedResource Include="Assets\cloud-browser-modern.ico" LogicalName="CloudFolderBrowser.Assets.AppIcon.ico" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="CircularProgressBar" Version="2.8.0.16" />
-    <PackageReference Include="HtmlAgilityPack" Version="1.11.43" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="nulastudio.NetBeauty" Version="2.1.4.1" />
-    <PackageReference Include="PortableSettingsProvider" Version="0.2.4" />
+    <PackageReference Include="HtmlAgilityPack" Version="1.13.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="PortableSettingsProvider" Version="0.2.5" />
   </ItemGroup>
   <ItemGroup>
     <Compile Update="Properties\Settings.Designer.cs">
@@ -108,5 +82,5 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Modules\" />
-  </ItemGroup> 
- </Project>
+  </ItemGroup>
+</Project>

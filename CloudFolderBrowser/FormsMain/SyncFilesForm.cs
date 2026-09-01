@@ -9,10 +9,14 @@ using CloudFolderBrowser.FormsSecondary;
 using CloudFolderBrowser.JDownloader;
 using Newtonsoft.Json;
 using YandexDiskSharp.Models;
+using CloudFolderBrowser.Theming;
+using CloudFolderBrowser.Accounts;
+using CloudFolderBrowser.Networking;
+using CloudFolderBrowser.Providers;
 
 namespace CloudFolderBrowser
 {
-    public partial class SyncFilesForm : Form
+    public partial class SyncFilesForm : ThemedForm
     {
         List<CloudFile> checkedFiles;
         TreeModel newFiles_model, newFilesFlat_model;
@@ -23,11 +27,29 @@ namespace CloudFolderBrowser
         List<Label> progressLabels;
         bool HideForm = true;
         MegaApiClient megaApiClient;
-        NetworkCredential NetworkCredential;
+        NetworkCredential? NetworkCredential;
         Download Download;
+        bool downloadCompletionHandled;
+        bool downloadInProgress;
+        bool closeWhenDownloadStops;
+
+        private sealed class DownloadRouteOption
+        {
+            public string RouteId { get; init; } = DownloadRouteIds.Direct;
+            public string DisplayName { get; init; } = string.Empty;
+            public CloudAccountProfile? Account { get; init; }
+            public bool IsAutomatic => RouteId == DownloadRouteIds.Automatic;
+            public override string ToString() => DisplayName;
+        }
 
         MainForm MainForm;
+        internal MainForm HostMainForm => MainForm;
         MainFormModel Model;
+        readonly string? DownloadBasePathOverride;
+        readonly CloudAccountStore AccountStore;
+        string DownloadBasePath => string.IsNullOrWhiteSpace(DownloadBasePathOverride)
+            ? MainForm.syncFolderPath
+            : DownloadBasePathOverride;
 
         public event EventHandler DownloadCompleted;
         protected virtual void OnDownloadCompleted(EventArgs e)
@@ -54,17 +76,26 @@ namespace CloudFolderBrowser
         public void UpdateSettings()
         {
             OverwriteMode = Properties.Settings.Default.overwriteMode;
-            MaximumDownloads = Properties.Settings.Default.maximumDownloads;
-            RetryDelay = Properties.Settings.Default.retryDelay;
-            RetryMax = Properties.Settings.Default.retryMax;
-            CheckFileSizeError = Properties.Settings.Default.checkFileSizeError;
+            MaximumDownloads = Math.Clamp(Properties.Settings.Default.maximumDownloads, 1, 4);
+            RetryDelay = Math.Max(100, Properties.Settings.Default.retryDelay);
+            RetryMax = Math.Max(0, Properties.Settings.Default.retryMax);
+            CheckFileSizeError = Math.Clamp(Properties.Settings.Default.checkFileSizeError, 0.01, 1.0);
             FolderNewFiles = Properties.Settings.Default.folderNewFiles;
             CheckDownloadedFileSize = Properties.Settings.Default.checkDownloadedFileSize;
         }
 
-        public SyncFilesForm(MainForm parentForm, CloudFolder newFilesFolder, MainFormModel model)
+        public SyncFilesForm(
+            MainForm parentForm,
+            CloudFolder newFilesFolder,
+            MainFormModel model,
+            string? downloadBasePathOverride = null,
+            CloudAccountStore? cloudAccountStore = null)
         {
             InitializeComponent();
+
+            downloadFiles_button.Tag = "primary";
+            stopDownload_button.Tag = "danger";
+            ConfigureModernUi();
 
             if (Properties.Settings.Default.maximumDownloads == 0)
             {
@@ -81,11 +112,16 @@ namespace CloudFolderBrowser
 
             MainForm = parentForm;
             Model = model;
+            DownloadBasePathOverride = downloadBasePathOverride;
+            AccountStore = cloudAccountStore ?? CloudAccountStore.Default;
             NetworkCredential = Model.WebdavCredential;
-            SendMessage(filter_textBox.Handle, 0x1501, 1, "Filter by name");
+            PopulateDownloadRoutes();
+            SendMessage(filter_textBox.Handle, 0x1501, 1, "Search missing files by name");
             filter_textBox.TextChangedComplete += filter_TextChangedComplete;
 
             cloudServiceType = Model.CloudServiceType;
+            importMega_button.Text = "Manage cloud accounts";
+            importMega_button.Enabled = true;
             if (cloudServiceType == CloudServiceType.Mega)
             {
                 if (!Model.LoadedFromFile)
@@ -93,10 +129,15 @@ namespace CloudFolderBrowser
                     if (MainForm.usingFogLink)
                         downloadFiles_button.Enabled = false;
 
-                    downloadFiles_button.Text = "MEGA download";
-
                     if (Properties.Settings.Default.loginedMega)
+                    {
+                        importMega_button.Text = "Import to MEGA";
                         importMega_button.Enabled = true;
+                    }
+                    else
+                    {
+                        importMega_button.Text = "Connect MEGA account";
+                    }
                 }
                 else
                 {
@@ -112,7 +153,14 @@ namespace CloudFolderBrowser
             if (cloudServiceType == CloudServiceType.Yadisk)
             {
                 if (Properties.Settings.Default.loginedYandex)
+                {
+                    importMega_button.Text = "Import to Yandex Disk";
                     importMega_button.Enabled = true;
+                }
+                else
+                {
+                    importMega_button.Text = "Connect Yandex account";
+                }
                 getJdLinks_button.Enabled = true;
             }
 
@@ -120,6 +168,12 @@ namespace CloudFolderBrowser
             progressLabels = new List<Label> { label1, label2, label3, label4, DownloadProgress_label };
 
             rootFolder = newFilesFolder;
+            if (transferSummaryLabel != null)
+            {
+                long totalBytes = Math.Max(0, newFilesFolder.Files.Sum(file => file.Size));
+                transferSummaryLabel.Text =
+                    $"{newFilesFolder.Files.Count:N0} file(s) • {FormatBytes(totalBytes)}\nReview selections before starting.";
+            }
             nodeCheckBox2.CheckStateChanged += new EventHandler<TreePathEventArgs>(NodeCheckStateChanged);
             newFilesTreeViewAdv.ShowNodeToolTips = true;
             newFilesTreeViewAdv.NodeControls[2].ToolTipProvider = new ToolTipProvider();
@@ -145,7 +199,7 @@ namespace CloudFolderBrowser
                 rootFlatNode.Nodes.Add(ffileNode);
 
                 string[] folders = Utility.ParsePath(file.Path);
-                if (folders == null) //file is in root folder
+                if (folders.Length == 0) //file is in root folder
                 {
                     ColumnNode subNode = new ColumnNode(file.Name, file.Created, file.Modified, file.Size);
                     subNode.Tag = file;
@@ -189,9 +243,13 @@ namespace CloudFolderBrowser
                 }
             }
             newFilesTreeViewAdv.EndUpdate();
-            newFilesTreeViewAdv.Root.Children[0].Expand();
-            newFiles_model.Nodes[0].IsChecked = true;
-            CheckAllSubnodes(newFiles_model.Nodes[0] as ColumnNode, false);
+            if (newFilesTreeViewAdv.Root.Children.Count > 0)
+                newFilesTreeViewAdv.Root.Children[0].Expand();
+            if (newFiles_model.Nodes.Count > 0 && newFiles_model.Nodes[0] is ColumnNode modelRootNode)
+            {
+                modelRootNode.IsChecked = true;
+                CheckAllSubnodes(modelRootNode, false);
+            }
             newFilesTreeViewAdv.Columns[0].MinColumnWidth = 100;
 
             checkAllToolStripMenuItem.Click += CheckAllToolStripMenuItem_Click;
@@ -199,10 +257,32 @@ namespace CloudFolderBrowser
             expandAllToolStripMenuItem.Click += ExpandAllToolStripMenuItem_Click;
             collapseAllToolStripMenuItem.Click += CollapseAllToolStripMenuItem_Click;
             Show();
+            NormalizeSyncLayout();
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            string[] units = { "B", "KB", "MB", "GB", "TB" };
+            double value = Math.Max(0, bytes);
+            int unit = 0;
+            while (value >= 1024 && unit < units.Length - 1)
+            {
+                value /= 1024;
+                unit++;
+            }
+            return $"{value:0.##} {units[unit]}";
         }
 
         public void CloseForm()
         {
+            if (downloadInProgress && Download != null)
+            {
+                closeWhenDownloadStops = true;
+                Hide();
+                Download.Stop();
+                return;
+            }
+
             HideForm = false;
             Close();
         }
@@ -211,7 +291,8 @@ namespace CloudFolderBrowser
 
         void GetCheckedFiles(Node node)
         {
-            checkedFolders.Add(node.Tag as CloudFolder);
+            if (node.Tag is CloudFolder currentFolder)
+                checkedFolders.Add(currentFolder);
 
             if (node.CheckState == CheckState.Checked)
             {
@@ -221,9 +302,8 @@ namespace CloudFolderBrowser
 
             foreach (Node subnode in node.Nodes)
             {
-                if (subnode.Tag.GetType().ToString() == "CloudFolderBrowser.CloudFolder")
+                if (subnode.Tag is CloudFolder folder)
                 {
-                    var folder = subnode.Tag as CloudFolder;
                     if (subnode.CheckState == CheckState.Indeterminate)
                     {
                         GetCheckedFiles(subnode);
@@ -249,7 +329,8 @@ namespace CloudFolderBrowser
             {
                 if (subnode.Tag == null || subnode.Tag.GetType().ToString() == "CloudFolderBrowser.CloudFolder")
                 {
-                    checkedFolders.Add(subnode.Tag as CloudFolder);
+                    if (subnode.Tag is CloudFolder folder)
+                        checkedFolders.Add(folder);
                     AddAllFiles(subnode);
                 }
                 else
@@ -285,14 +366,14 @@ namespace CloudFolderBrowser
 
             if (cloudServiceType == CloudServiceType.Mega && megaApiClient == null)
             {
-                megaApiClient = new MegaApiClient();
+                megaApiClient = NetworkClientAdapters.CreateMegaClient();
                 megaApiClient.LoginAnonymous();
             }
 
             foreach (CloudFile file in checkedFiles)
             {
                 //string folderPath = file.Path.Replace(file.Name, "");
-                var folderPath = Path.GetDirectoryName(file.Path);
+                string folderPath = Path.GetDirectoryName(file.Path) ?? string.Empty;
                 JDPackage pak;
                 if (!packages.ConvertAll(x => x.name).Contains(folderPath))
                 {
@@ -304,26 +385,30 @@ namespace CloudFolderBrowser
                 }
                 else
                 {
-                    pak = packages.Find(x => x.name == folderPath);
+                    pak = packages.Find(x => x.name == folderPath)
+                        ?? throw new InvalidDataException($"Unable to create a package for {file.Path}.");
                 }
                 JDLink link;
                 switch (cloudServiceType)
                 {
                     case CloudServiceType.Mega:
                         //string downloadLink = ""; //megaApiClient.GetDownloadLink(file.MegaNode).ToString();
-                        link = new JDLink(file.Name, file.PublicUrl.OriginalString);
+                        link = new JDLink(file.Name, file.PublicUrl?.OriginalString
+                            ?? throw new InvalidDataException($"MEGA link is missing for {file.Name}."));
                         break;
                     case CloudServiceType.Yadisk:
-                        YandexDiskSharp.RestClient restClient = new YandexDiskSharp.RestClient();
+                        YandexDiskSharp.RestClient restClient = NetworkClientAdapters.CreateYandexClient();
                         string downloadLink = restClient.GetPublicResourceDownloadLink(rootFolder.PublicKey, file.Path).Href.ToString();
                         link = new JDLink(file.Name, downloadLink);
                         break;
                     default:
-                        link = new JDLink(file.Name, System.Web.HttpUtility.UrlDecode(file.PublicUrl.AbsoluteUri));
+                        link = new JDLink(file.Name, System.Web.HttpUtility.UrlDecode(
+                            file.PublicUrl?.AbsoluteUri
+                            ?? throw new InvalidDataException($"Download link is missing for {file.Name}.")));
                         //link = new JDLink(file.Name, file.PublicUrl.AbsoluteUri.Replace("#", "%23").Replace(",", "%2C").Replace("?", "%3F"));                        
                         break;
                 }
-                link.downloadLink.size = (int)file.Size;
+                link.downloadLink.size = file.Size;
                 File.WriteAllText($"{di.FullName}\\{pak.numberId}_{pak.linksCount.ToString("D3")}", JsonConvert.SerializeObject(link));
                 pak.linksCount++;
             }
@@ -348,7 +433,7 @@ namespace CloudFolderBrowser
             downloadsFinishedForm.Show();
         }
 
-        void AddCheckedFilesToYadisk()
+        async Task AddCheckedFilesToYadiskAsync()
         {
             if (checkedFilesSize > MainForm.freeSpace)
             {
@@ -360,28 +445,43 @@ namespace CloudFolderBrowser
                 DialogResult dialogResult = MessageBox.Show(checkedFiles.Count + $" new files found. Size: {Math.Round(checkedFilesSize / 1000000.0, 2)} MB. Download?", "", MessageBoxButtons.YesNo);
                 if (dialogResult == DialogResult.Yes)
                 {
+                    if (MainForm.rc == null
+                        || MainForm.yadiskFolder == null)
+                    {
+                        MessageBox.Show("Yandex Disk is not ready. Connect the account and try again.");
+                        return;
+                    }
+
                     foreach (CloudFile file in checkedFiles)
                     {
                         string savePath = Model.CloudPublicFolder.Name + file.Path;
                         string[] folders = Utility.ParsePath(savePath);
-                        CloudFolder currentFolder = (CloudFolder)MainForm.yadiskFolder.Subfolders[2];
+                        CloudFolder currentFolder = MainForm.yadiskFolder;
                         savePath = currentFolder.Path;
                         for (int i = 0; i < folders.Length; i++)
                         {
                             if (!currentFolder.Subfolders.ConvertAll(x => x.Name).Contains(folders[i]))
                             {
-                                Link linki = MainForm.rc.CreateResource(currentFolder.Path.Replace("disk:", "") + "/" + folders[i]);
+                                string createdPath = CombineYandexPath(currentFolder.Path, folders[i]);
+                                await MainForm.rc.CreateResourceAsync(createdPath);
                                 CloudFolder createdFolder = new CloudFolder(folders[i], DateTime.Now, DateTime.Now, 0);
-                                createdFolder.Path = currentFolder.Path + "/" + folders[i];
+                                createdFolder.Path = createdPath;
                                 currentFolder.Subfolders.Add(createdFolder);
                             }
-                            currentFolder = (CloudFolder)currentFolder.Subfolders.Find(x => x.Name == folders[i]);
-                            savePath += "/" + folders[i];
+                            IFolder? nextFolder = currentFolder.Subfolders.Find(x => x.Name == folders[i]);
+                            if (nextFolder is not CloudFolder cloudFolder)
+                                throw new InvalidDataException($"Unable to create Yandex Disk folder {folders[i]}.");
+                            currentFolder = cloudFolder;
+                            savePath = CombineYandexPath(savePath, folders[i]);
                         }
                         //Uri link = (rc.GetPublicResourceDownloadLink(cloudPublicFolder.PublicKey, file.Path)).Href;  
 
                         //TODO: add whole folders if all files inside are checked
-                        Link link = MainForm.rc.SaveToDiskPublicResource(Model.CloudPublicFolder.PublicKey, file.Name, file.Path, savePath);
+                        _ = await MainForm.rc.SaveToDiskPublicResourceAsync(
+                            Model.CloudPublicFolder.PublicKey,
+                            file.Name,
+                            file.Path,
+                            savePath);
                     }
                     MessageBox.Show("Finished");
                 }
@@ -390,7 +490,7 @@ namespace CloudFolderBrowser
                 MessageBox.Show("No files checked!");
         }
 
-        async Task ImportCheckedToMega()
+        void ImportCheckedToMega()
         {
             if (checkedFilesSize > MainForm.freeSpace)
             {
@@ -402,6 +502,12 @@ namespace CloudFolderBrowser
                 DialogResult dialogResult = MessageBox.Show(checkedFiles.Count + $" new files found. Size: {Math.Round(checkedFilesSize / 1000000.0, 2)} MB. Download?", "", MessageBoxButtons.YesNo);
                 if (dialogResult == DialogResult.Yes)
                 {
+                    if (MainForm.MegaRootNode == null)
+                    {
+                        MessageBox.Show("Sign in to MEGA before importing files.");
+                        return;
+                    }
+
                     var nodes = new List<INode>() { };
                     foreach (CloudFolder folder in checkedFolders)
                     {
@@ -410,11 +516,8 @@ namespace CloudFolderBrowser
                     }
                     foreach (CloudFile file in checkedFiles)
                     {
-                        string savePath = Model.CloudPublicFolder.Name + file.Path;
-                        var fileUri = new Uri($"https://mega.nz/folder/" +
-                            $"{Model.CloudPublicFolder.PublicKey}#{Model.CloudPublicFolder.PublicDecryptionKey}/file/" + file.MegaNode.Id);
-
-                        nodes.Add(file.MegaNode);
+                        if (file.MegaNode != null)
+                            nodes.Add(file.MegaNode);
                     }
                     MainForm.megaClient.ImportNodes(nodes.ToArray(), MainForm.MegaRootNode);
                     MessageBox.Show("Finished");
@@ -446,7 +549,8 @@ namespace CloudFolderBrowser
                     {
                         nodes.Add(file.EncryptedUrl);
                     }
-                    HttpClient client = new HttpClient();
+                    using HttpClient client = AppHttpClientFactory.CreateClient(
+                        TimeSpan.FromSeconds(60), routeKey: "FogLink");
                     //MegaApiClient tempClient = new MegaApiClient();
                     //var token = tempClient.Login(Properties.Settings.Default.megaLogin, Properties.Settings.Default.megaPassword);
                     //tempClient.Logout();
@@ -454,7 +558,7 @@ namespace CloudFolderBrowser
                     var postJson = JsonConvert.SerializeObject(postData);
                     var content = new StringContent(postJson, Encoding.UTF8, "application/json");
                     client.BaseAddress = FogLink.ServerAddress;
-                    HttpResponseMessage response = await client.PostAsync(
+                    using HttpResponseMessage response = await client.PostAsync(
                         $"MegaPrivater/import", content);
                     var megaCode = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)
@@ -480,20 +584,71 @@ namespace CloudFolderBrowser
             public string password;
         }
 
-        private void DownloadFiles()
+        private async Task<bool> DownloadFiles(DownloadRouteOption route)
         {
+            if (string.IsNullOrWhiteSpace(DownloadBasePath)
+                || !Directory.Exists(DownloadBasePath))
+            {
+                MessageBox.Show("Select a valid local sync folder before downloading.");
+                return false;
+            }
+
             checkedFiles = new List<CloudFile>();
             checkedFilesSize = 0;
-            GetCheckedFiles((((SortedTreeModel)newFilesTreeViewAdv.Model).InnerModel as TreeModel).Nodes[0]);
+            ColumnNode? rootNode = GetDisplayedRootNode();
+            if (rootNode == null)
+            {
+                MessageBox.Show("The file list is not ready yet.");
+                return false;
+            }
+            GetCheckedFiles(rootNode);
+
+            if (checkedFiles.Count == 0)
+            {
+                MessageBox.Show("No files checked!");
+                return false;
+            }
+
+            IReadOnlyList<CloudAccountProfile> activeDebridAccounts = AccountStore.GetAll()
+                .Where(account => account.IsActive
+                    && !string.IsNullOrWhiteSpace(account.Secret)
+                    && CloudProviderRegistry.Default.SupportsLinkResolver(account.Provider))
+                .ToArray();
+            if (route.IsAutomatic
+                && checkedFiles.Any(file => file.RequiresLinkResolver)
+                && activeDebridAccounts.Count == 0)
+            {
+                MessageBox.Show(
+                    "This share requires a link resolver, but no active debrid account is configured. Add an account or choose another route.",
+                    "Automatic route needs an account",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return false;
+            }
+
+            IDownloadLinkResolver? linkResolver = route.IsAutomatic
+                ? new AutomaticDownloadLinkResolver(
+                    activeDebridAccounts,
+                    GetPreferredDebridAccountId())
+                : route.Account != null
+                    ? CloudProviderRegistry.Default.CreateLinkResolver(route.Account)
+                    : null;
+
+            if (linkResolver == null && checkedFiles.Any(file => file.RequiresLinkResolver))
+            {
+                MessageBox.Show(
+                    "This share exposes a web page rather than a direct file. Select an active debrid provider in Download route, then try again.",
+                    "Debrid route required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return false;
+            }
 
             DialogResult dialogResult =
                 MessageBox.Show($"Got links for {checkedFiles.Count} files [{(int)(checkedFilesSize / 1000000)} MB]  Continue?", "Result",
                 MessageBoxButtons.YesNo);
             if (dialogResult == DialogResult.No)
-                return;
-
-            if (FolderNewFiles)
-                Directory.CreateDirectory(MainForm.syncFolderPath + @"\0_New Files\" + DateTime.Now.ToShortDateString());
+                return false;
 
             ProgressBar[] usedProgressBars = new ProgressBar[MaximumDownloads];
             Label[] usedLabels = new Label[MaximumDownloads + 1];
@@ -505,7 +660,8 @@ namespace CloudFolderBrowser
             usedLabels[MaximumDownloads] = progressLabels[progressLabels.Count - 1];
 
             Download = new CommonDownload(checkedFiles, usedProgressBars, usedLabels, toolTip1, cloudServiceType,
-                MainForm.syncFolderPath, OverwriteMode, NetworkCredential, FolderNewFiles);
+                DownloadBasePath, OverwriteMode, NetworkCredential, FolderNewFiles,
+                Model.FlareSolverrSession, linkResolver, requestedRouteId: route.RouteId);
             Download.MaxDownloadRetries = RetryMax;
             Download.RetryDelay = RetryDelay;
 
@@ -513,24 +669,53 @@ namespace CloudFolderBrowser
             Download.CheckDownloadedFileSize = CheckDownloadedFileSize;
 
             Download.DownloadCompleted += Download_DownloadCompleted;
-            Download.Start();
+            downloadCompletionHandled = false;
+            await Download.Start();
 
-            stopDownload_button.Enabled = true;
-            stopDownload_button.Visible = true;
+            if (!downloadCompletionHandled)
+            {
+                stopDownload_button.Enabled = true;
+                stopDownload_button.Visible = true;
+            }
+            return true;
         }
 
-        private async Task DownloadMega()
+        private static string CombineYandexPath(string parent, string child)
         {
+            string normalizedParent = string.IsNullOrWhiteSpace(parent) ? "disk:/" : parent.TrimEnd('/');
+            if (normalizedParent.Equals("disk:", StringComparison.OrdinalIgnoreCase))
+                normalizedParent = "disk:";
+            return normalizedParent + "/" + child.Trim('/');
+        }
+
+        private async Task<bool> DownloadMega(string requestedRouteId)
+        {
+            if (string.IsNullOrWhiteSpace(DownloadBasePath)
+                || !Directory.Exists(DownloadBasePath))
+            {
+                MessageBox.Show("Select a valid local sync folder before downloading.");
+                return false;
+            }
+
             checkedFiles = new List<CloudFile>();
             checkedFilesSize = 0;
-            GetCheckedFiles((((SortedTreeModel)newFilesTreeViewAdv.Model).InnerModel as TreeModel).Nodes[0]);
+            ColumnNode? rootNode = GetDisplayedRootNode();
+            if (rootNode == null)
+            {
+                MessageBox.Show("The file list is not ready yet.");
+                return false;
+            }
+            GetCheckedFiles(rootNode);
+
+            if (checkedFiles.Count == 0)
+            {
+                MessageBox.Show("No files checked!");
+                return false;
+            }
 
             DialogResult dialogResult = MessageBox.Show($"Got links for {checkedFiles.Count} files [{(int)(checkedFilesSize / 1000000)} MB]  Continue?", "Result", MessageBoxButtons.YesNo);
             if (dialogResult == DialogResult.No)
-                return;
-
-            if (FolderNewFiles)
-                Directory.CreateDirectory(MainForm.syncFolderPath + @"\0_New Files\" + DateTime.Now.ToShortDateString());
+                return false;
 
             ProgressBar[] usedProgressBars = new ProgressBar[MaximumDownloads];
             Label[] usedLabels = new Label[MaximumDownloads + 1];
@@ -543,7 +728,7 @@ namespace CloudFolderBrowser
 
             if (megaApiClient == null)
             {
-                megaApiClient = new MegaApiClient();
+                megaApiClient = NetworkClientAdapters.CreateMegaClient();
                 if (Properties.Settings.Default.loginedMega && Properties.Settings.Default.loginTokenMega != "")
                 {
                     var megaLoginToken = JsonConvert.DeserializeObject<MegaApiClient.LogonSessionToken>(
@@ -568,7 +753,8 @@ namespace CloudFolderBrowser
             }
 
             Download = new MegaDownload(megaApiClient, checkedFiles, usedProgressBars, usedLabels, toolTip1,
-                MainForm.syncFolderPath, OverwriteMode, FolderNewFiles, Model.CloudPublicFolder.PublicKey);
+                DownloadBasePath, OverwriteMode, FolderNewFiles, Model.CloudPublicFolder.PublicKey,
+                requestedRouteId: requestedRouteId);
             Download.MaxDownloadRetries = RetryMax;
             Download.RetryDelay = RetryDelay;
 
@@ -576,10 +762,15 @@ namespace CloudFolderBrowser
             Download.CheckDownloadedFileSize = CheckDownloadedFileSize;
 
             Download.DownloadCompleted += Download_DownloadCompleted;
-            Download.Start();
+            downloadCompletionHandled = false;
+            await Download.Start();
 
-            stopDownload_button.Enabled = true;
-            stopDownload_button.Visible = true;
+            if (!downloadCompletionHandled)
+            {
+                stopDownload_button.Enabled = true;
+                stopDownload_button.Visible = true;
+            }
+            return true;
         }
 
         #region #TREEVIEW
@@ -602,7 +793,7 @@ namespace CloudFolderBrowser
             //e.Node.Tree.Columns[0].Width += (int)Math.Round(e.Node.Tree.Columns[0].Width * 0.2, 0);
         }
 
-        void CheckIndex(object sender, NodeControlValueEventArgs e)
+        void CheckIndex(object? sender, NodeControlValueEventArgs e)
         {
             var currentNode = (ColumnNode)(e.Node.Tag);
             var parentNode = (currentNode.Parent);
@@ -662,7 +853,7 @@ namespace CloudFolderBrowser
             }
         }
 
-        void NodeCheckStateChanged(object sender, TreePathEventArgs e)
+        void NodeCheckStateChanged(object? sender, TreePathEventArgs e)
         {
             ColumnNode checkedNode = (ColumnNode)e.Path.LastNode;
 
@@ -783,24 +974,19 @@ namespace CloudFolderBrowser
             }
         }
 
-        Node FindNodeByPath(Node root, string path)
+        Node? FindNodeByPath(Node root, string path)
         {
             string[] parsedPath = Utility.ParsePath(path, true);
             Node currentNode = root;
-            int i = 0;
-            while (i < parsedPath.Length)
+            foreach (string segment in parsedPath)
             {
-                if (currentNode.Nodes == null)
+                Node? nextNode = currentNode.Nodes
+                    .Cast<Node>()
+                    .FirstOrDefault(node => node.Text == segment);
+                if (nextNode == null)
                     return null;
-                foreach (Node n in currentNode.Nodes)
-                {
-                    if (n.Text == (parsedPath[i]))
-                    {
-                        currentNode = n;
-                        i++;
-                        break;
-                    }
-                }
+
+                currentNode = nextNode;
             }
             return currentNode;
 
@@ -814,92 +1000,261 @@ namespace CloudFolderBrowser
             else
                 clicked.SortOrder = SortOrder.Ascending;
 
-            (((TreeViewAdv)sender).Model as SortedTreeModel).Comparer = new FolderItemSorter(clicked.Header, clicked.SortOrder);
+            if (sender is TreeViewAdv treeView && treeView.Model is SortedTreeModel sortedModel)
+                sortedModel.Comparer = new FolderItemSorter(clicked.Header, clicked.SortOrder);
         }
 
-        private void CollapseAllToolStripMenuItem_Click(object sender, EventArgs e)
+        private void CollapseAllToolStripMenuItem_Click(object? sender, EventArgs e)
         {
             if (flatList2_checkBox.Checked)
                 return;
             newFilesTreeViewAdv.Model = new SortedTreeModel(newFiles_model);
-            newFilesTreeViewAdv.Root.Children[0].Expand();
+            if (newFilesTreeViewAdv.Root.Children.Count > 0)
+                newFilesTreeViewAdv.Root.Children[0].Expand();
             newFilesTreeViewAdv.AutoSizeColumn(newFilesTreeViewAdv.Columns[0]);
         }
 
-        private void ExpandAllToolStripMenuItem_Click(object sender, EventArgs e)
+        private void ExpandAllToolStripMenuItem_Click(object? sender, EventArgs e)
         {
             newFilesTreeViewAdv.ExpandAll();
             newFilesTreeViewAdv.AutoSizeColumn(newFilesTreeViewAdv.Columns[0]);
         }
 
-        private void CheckNoneToolStripMenuItem_Click(object sender, EventArgs e)
+        private void CheckNoneToolStripMenuItem_Click(object? sender, EventArgs e)
         {
-            var mdl = (newFilesTreeViewAdv.Model as SortedTreeModel).InnerModel as TreeModel;
-            mdl.Nodes[0].IsChecked = false;
-            CheckAllSubnodes(mdl.Nodes[0] as ColumnNode, true);
+            ColumnNode? rootNode = GetDisplayedRootNode();
+            if (rootNode == null)
+                return;
+
+            rootNode.IsChecked = false;
+            CheckAllSubnodes(rootNode, true);
             newFilesTreeViewAdv.Refresh();
         }
 
-        private void CheckAllToolStripMenuItem_Click(object sender, EventArgs e)
+        private void CheckAllToolStripMenuItem_Click(object? sender, EventArgs e)
         {
-            var mdl = (newFilesTreeViewAdv.Model as SortedTreeModel).InnerModel as TreeModel;
-            mdl.Nodes[0].IsChecked = true;
-            CheckAllSubnodes(mdl.Nodes[0] as ColumnNode, false);
+            ColumnNode? rootNode = GetDisplayedRootNode();
+            if (rootNode == null)
+                return;
+
+            rootNode.IsChecked = true;
+            CheckAllSubnodes(rootNode, false);
             newFilesTreeViewAdv.Refresh();
         }
 
         private bool filter(object obj)
         {
-            TreeNodeAdv viewNode = obj as TreeNodeAdv;
-            Node n = viewNode != null ? viewNode.Tag as Node : obj as Node;
-            ColumnNode nn = (ColumnNode)n;
-            bool hideByName = n == null || n.Text.ToUpper().Contains(this.filter_textBox.Text.ToUpper()) || n.Nodes.Any(filter);
-            return hideByName;
+            TreeNodeAdv? viewNode = obj as TreeNodeAdv;
+            Node? node = viewNode != null ? viewNode.Tag as Node : obj as Node;
+            if (node == null)
+                return false;
+
+            return node.Text?.Contains(
+                filter_textBox.Text,
+                StringComparison.CurrentCultureIgnoreCase) == true
+                || node.Nodes.Any(filter);
         }
 
         #endregion
 
         #region #BUTTONS
 
-        private void importYadisk_button_Click(object sender, EventArgs e)
+        private async void importMega_button_Click(object sender, EventArgs e)
         {
-            checkedFiles = new List<CloudFile>();
-            checkedFilesSize = 0;
-            GetCheckedFiles(newFiles_model.Nodes[0]);
-            AddCheckedFilesToYadisk();
-        }
-        private void importMega_button_Click(object sender, EventArgs e)
-        {
-            checkedFiles = new List<CloudFile>();
-            checkedFilesSize = 0;
-            checkedFolders = new List<CloudFolder>();
-            GetCheckedFiles(newFiles_model.Nodes[0]);
-            if (MainForm.usingFogLink)
-                ImportCheckedEncryptedToMega();
-            else
-                ImportCheckedToMega();
+            importMega_button.Enabled = false;
+            try
+            {
+                if ((cloudServiceType == CloudServiceType.Mega && !Properties.Settings.Default.loginedMega)
+                    || (cloudServiceType == CloudServiceType.Yadisk && !Properties.Settings.Default.loginedYandex)
+                    || cloudServiceType is not (CloudServiceType.Mega or CloudServiceType.Yadisk))
+                {
+                    using var accounts = new AccountManagerForm(MainForm, AccountStore);
+                    accounts.ShowDialog(this);
+                    PopulateDownloadRoutes();
+                    if (cloudServiceType == CloudServiceType.Mega)
+                        importMega_button.Text = Properties.Settings.Default.loginedMega
+                            ? "Import to MEGA"
+                            : "Connect MEGA account";
+                    else if (cloudServiceType == CloudServiceType.Yadisk)
+                        importMega_button.Text = Properties.Settings.Default.loginedYandex
+                            ? "Import to Yandex Disk"
+                            : "Connect Yandex account";
+                    return;
+                }
+
+                checkedFiles = new List<CloudFile>();
+                checkedFilesSize = 0;
+                checkedFolders = new List<CloudFolder>();
+                ColumnNode? rootNode = GetDisplayedRootNode();
+                if (rootNode == null)
+                {
+                    MessageBox.Show("The file list is empty or is not ready yet.");
+                    return;
+                }
+                GetCheckedFiles(rootNode);
+                if (cloudServiceType == CloudServiceType.Yadisk)
+                    await AddCheckedFilesToYadiskAsync();
+                else if (MainForm.usingFogLink)
+                    await ImportCheckedEncryptedToMega();
+                else
+                    ImportCheckedToMega();
+            }
+            catch (System.Exception ex)
+            {
+                string providerName = cloudServiceType == CloudServiceType.Yadisk ? "Yandex Disk" : "MEGA";
+                MessageBox.Show(
+                    $"Unable to import files to {providerName}: {ex.Message}",
+                    $"{providerName} import failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                importMega_button.Enabled = true;
+            }
         }
 
         private void getJdLinks_button_Click(object sender, EventArgs e)
         {
             checkedFiles = new List<CloudFile>();
             checkedFilesSize = 0;
-            GetCheckedFiles(((newFilesTreeViewAdv.Model as SortedTreeModel).InnerModel as TreeModel).Nodes[0]);
+            ColumnNode? rootNode = GetDisplayedRootNode();
+            if (rootNode == null)
+            {
+                MessageBox.Show("The file list is not ready yet.");
+                return;
+            }
+            GetCheckedFiles(rootNode);
             CreateJdLinkcontainer();
         }
 
-        private void downloadFiles_button_Click(object sender, EventArgs e)
+        private async void downloadFiles_button_Click(object sender, EventArgs e)
         {
-            if (cloudServiceType == CloudServiceType.Mega)
-                DownloadMega();
-            else
-                DownloadFiles();
+            if (downloadInProgress)
+                return;
+
+            downloadInProgress = true;
+            downloadFiles_button.Enabled = false;
+            try
+            {
+                DownloadRouteOption route = GetSelectedDownloadRoute();
+                bool started;
+                if (cloudServiceType == CloudServiceType.Mega && route.Account == null)
+                    started = await DownloadMega(route.RouteId);
+                else
+                    started = await DownloadFiles(route);
+
+                if (!started)
+                {
+                    downloadInProgress = false;
+                    downloadFiles_button.Enabled = true;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                downloadInProgress = false;
+                downloadFiles_button.Enabled = true;
+                MessageBox.Show(
+                    "Unable to start downloads: " + ex.Message,
+                    "Download error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        private void PopulateDownloadRoutes()
+        {
+            if (downloadRouteComboBox == null)
+                return;
+            var routes = new List<DownloadRouteOption>
+            {
+                new()
+                {
+                    RouteId = DownloadRouteIds.Automatic,
+                    DisplayName = "Automatic — recommended"
+                },
+                new()
+                {
+                    RouteId = DownloadRouteIds.Direct,
+                    DisplayName = "Direct (built-in downloader)"
+                }
+            };
+            try
+            {
+                routes.AddRange(AccountStore.GetAll()
+                    .Where(account => account.IsActive
+                        && CloudProviderRegistry.Default.SupportsLinkResolver(account.Provider))
+                    .OrderBy(account => account.ProviderName)
+                    .Select(account => new DownloadRouteOption
+                    {
+                        RouteId = DownloadRouteIds.ForAccount(account.Id),
+                        DisplayName = $"{account.ProviderName} — {account.DisplayName}",
+                        Account = account
+                    }));
+            }
+            catch (System.Exception ex)
+            {
+                Model?.WriteToLog($"\n{DateTime.Now:O}\nUnable to load download routes: {ex}\n", true);
+            }
+            downloadRouteComboBox.DataSource = routes;
+            string preferredRouteId = string.IsNullOrWhiteSpace(Model?.PreferredDownloadRouteId)
+                ? NormalizeSavedRouteId(Properties.Settings.Default.preferredDebridAccountId)
+                : Model.PreferredDownloadRouteId;
+            int preferredIndex = routes.FindIndex(route =>
+                route.RouteId.Equals(preferredRouteId, StringComparison.OrdinalIgnoreCase));
+            int selectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+            downloadRouteComboBox.SelectedIndex = selectedIndex;
+        }
+
+        private DownloadRouteOption GetSelectedDownloadRoute()
+        {
+            return downloadRouteComboBox?.SelectedItem as DownloadRouteOption
+                ?? new DownloadRouteOption
+                {
+                    RouteId = DownloadRouteIds.Automatic,
+                    DisplayName = "Automatic — recommended"
+                };
+        }
+
+        private static string NormalizeSavedRouteId(string? routeId)
+        {
+            if (string.IsNullOrWhiteSpace(routeId))
+                return DownloadRouteIds.Automatic;
+            if (routeId.Equals(DownloadRouteIds.Automatic, StringComparison.OrdinalIgnoreCase)
+                || routeId.Equals(DownloadRouteIds.Direct, StringComparison.OrdinalIgnoreCase)
+                || routeId.StartsWith("debrid:", StringComparison.OrdinalIgnoreCase))
+            {
+                return routeId;
+            }
+            return Guid.TryParse(routeId, out Guid accountId)
+                ? DownloadRouteIds.ForAccount(accountId)
+                : DownloadRouteIds.Automatic;
+        }
+
+        private static Guid? GetPreferredDebridAccountId()
+        {
+            string value = Properties.Settings.Default.preferredDebridAccountId;
+            if (DownloadRouteIds.TryGetAccountId(value, out Guid routeAccountId))
+                return routeAccountId;
+            return Guid.TryParse(value, out Guid legacyAccountId) ? legacyAccountId : null;
+        }
+
+        private ColumnNode? GetDisplayedRootNode()
+        {
+            if (newFilesTreeViewAdv.Model is not SortedTreeModel sortedModel
+                || sortedModel.InnerModel is not TreeModel treeModel
+                || treeModel.Nodes.Count == 0)
+            {
+                return null;
+            }
+
+            return treeModel.Nodes[0] as ColumnNode;
         }
 
         private void stopDownloads_Click(object sender, EventArgs e)
         {
+            stopDownload_button.Enabled = false;
             Download?.Stop();
-            OnDownloadCompleted(EventArgs.Empty);
         }
 
         #endregion
@@ -913,27 +1268,51 @@ namespace CloudFolderBrowser
             }
         }
 
-        private void Download_DownloadCompleted(object sender, EventArgs e)
+        private void Download_DownloadCompleted(object? sender, EventArgs e)
         {
-            for (int i = 0; i < MaximumDownloads; i++)
+            if (downloadCompletionHandled)
+                return;
+            downloadCompletionHandled = true;
+            downloadInProgress = false;
+            Download completedDownload = sender as Download ?? Download;
+
+            for (int i = 0; i < progressBars.Count; i++)
             {
                 progressBars[i].Value = 0;
                 progressLabels[i].Text = "";
             }
-            progressLabels[4].Text = "";
-            string message2 = "", message1 = "All downloads are finished!";
+            if (progressLabels.Count > 0)
+                progressLabels[progressLabels.Count - 1].Text = "";
+            stopDownload_button.Enabled = false;
+            stopDownload_button.Visible = false;
+            downloadFiles_button.Enabled = true;
 
-            if (Download != null)
+            string message2 = "";
+            string message1 = completedDownload?.CancellationTokenSource.IsCancellationRequested == true
+                ? "Downloads paused. Select Download again to resume."
+                : "All downloads are finished!";
+            if (completedDownload?.CancellationTokenSource.IsCancellationRequested == true)
+                downloadFiles_button.Text = "Resume checked files";
+
+            if (completedDownload != null && !closeWhenDownloadStops)
             {
-                if (Download.FailedDownloads.Count > 0)
-                    message2 += $" Failed: {Download.FailedDownloads.Count}";
+                if (completedDownload.FailedDownloads.Count > 0)
+                    message2 += $" Failed: {completedDownload.FailedDownloads.Count}";
 
-                DownloadsFinishedForm downloadsFinishedForm = new DownloadsFinishedForm(Download.DownloadFolderPath, message1, message2);
+                DownloadsFinishedForm downloadsFinishedForm = new DownloadsFinishedForm(completedDownload.DownloadFolderPath, message1, message2);
                 downloadsFinishedForm.Show();
+            }
+
+            OnDownloadCompleted(EventArgs.Empty);
+
+            if (closeWhenDownloadStops)
+            {
+                HideForm = false;
+                Close();
             }
         }
 
-        private void filter_TextChangedComplete(object sender, EventArgs e)
+        private void filter_TextChangedComplete(object? sender, EventArgs e)
         {
             newFilesTreeViewAdv.UpdateNodeFilter();
         }
@@ -943,7 +1322,8 @@ namespace CloudFolderBrowser
             if (flatList2_checkBox.Checked)
             {
                 newFilesTreeViewAdv.Model = new SortedTreeModel(newFilesFlat_model);
-                TransferNodeCheckState(newFiles_model.Nodes[0] as ColumnNode);
+                if (newFiles_model.Nodes.Count > 0 && newFiles_model.Nodes[0] is ColumnNode sourceRoot)
+                    TransferNodeCheckState(sourceRoot);
                 newFilesTreeViewAdv.ShowNodeToolTips = true;
                 newFilesTreeViewAdv.ExpandAll();
                 newFilesTreeViewAdv.AutoSizeColumn(newFilesTreeViewAdv.Columns[0]);
@@ -952,13 +1332,15 @@ namespace CloudFolderBrowser
             else
             {
                 newFilesTreeViewAdv.Model = new SortedTreeModel(newFiles_model);
-                TransferNodeCheckState(newFilesFlat_model.Nodes[0] as ColumnNode);
+                if (newFilesFlat_model.Nodes.Count > 0 && newFilesFlat_model.Nodes[0] is ColumnNode sourceRoot)
+                    TransferNodeCheckState(sourceRoot);
                 newFilesTreeViewAdv.ShowNodeToolTips = false;
-                newFilesTreeViewAdv.Root.Children[0].Expand();
+                if (newFilesTreeViewAdv.Root.Children.Count > 0)
+                    newFilesTreeViewAdv.Root.Children[0].Expand();
             }
         }
 
-        private void settingsToolStripMenuItem_Click(object sender, EventArgs e)
+        private void settingsToolStripMenuItem_Click(object? sender, EventArgs e)
         {
             new SyncSettingsForm(this).ShowDialog();
         }       

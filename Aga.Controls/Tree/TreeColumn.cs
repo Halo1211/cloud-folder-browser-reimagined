@@ -272,6 +272,34 @@ namespace Aga.Controls.Tree
 			set { _useCompatibleTextRendering = value; }
 		}
 
+		private Color _headerBackColor = Color.Empty;
+		public Color HeaderBackColor
+		{
+			get { return _headerBackColor; }
+			set
+			{
+				if (_headerBackColor != value)
+				{
+					_headerBackColor = value;
+					OnHeaderChanged();
+				}
+			}
+		}
+
+		private Color _headerTextColor = Color.Empty;
+		public Color HeaderTextColor
+		{
+			get { return _headerTextColor; }
+			set
+			{
+				if (_headerTextColor != value)
+				{
+					_headerTextColor = value;
+					OnHeaderChanged();
+				}
+			}
+		}
+
 		#region Draw
 
 		private static VisualStyleRenderer _normalRenderer;
@@ -305,7 +333,17 @@ namespace Aga.Controls.Tree
 		}
 		internal void DrawBackground(Graphics gr, Rectangle bounds, bool pressed, bool hot)
 		{
-			if (!OnDrawColHeaderBg(gr, bounds, pressed, hot))
+			if (!_headerBackColor.IsEmpty)
+			{
+				Color fillColor = pressed
+					? ControlPaint.Dark(_headerBackColor)
+					: hot ? ControlPaint.Light(_headerBackColor) : _headerBackColor;
+				using (Brush brush = new SolidBrush(fillColor))
+					gr.FillRectangle(brush, bounds);
+				using (Pen pen = new Pen(ControlPaint.Dark(_headerBackColor)))
+					gr.DrawLine(pen, bounds.Right - 1, bounds.Top, bounds.Right - 1, bounds.Bottom);
+			}
+			else if (!OnDrawColHeaderBg(gr, bounds, pressed, hot))
 				DrawDefaultBackground(gr, bounds, pressed, hot);
 		}
         private void DrawContent(Graphics gr, Rectangle bounds, Font font)
@@ -331,13 +369,14 @@ namespace Aga.Controls.Tree
 					x = innerBounds.Right + SortOrderMarkMargin;
                 else
 					x = innerBounds.X + tw + (innerBounds.Width - tw) / 2 + SortOrderMarkMargin;
-                DrawSortMark(gr, bounds, x);
+				DrawSortMark(gr, bounds, x);
 			}
 
+			Color textColor = _headerTextColor.IsEmpty ? SystemColors.ControlText : _headerTextColor;
 			if (textSize.Width < maxTextSize.Width)
-				TextRenderer.DrawText(gr, Header, font, innerBounds, SystemColors.ControlText, _baseHeaderFlags | TextFormatFlags.Left);
+				TextRenderer.DrawText(gr, Header, font, innerBounds, textColor, _baseHeaderFlags | TextFormatFlags.Left);
             else
-				TextRenderer.DrawText(gr, Header, font, innerBounds, SystemColors.ControlText, _headerFlags);
+				TextRenderer.DrawText(gr, Header, font, innerBounds, textColor, _headerFlags);
         }
 		private void DrawSortMark(Graphics gr, Rectangle bounds, int x)
 		{
@@ -345,15 +384,17 @@ namespace Aga.Controls.Tree
 			x = Math.Max(x, bounds.X + SortOrderMarkMargin);
 
             int w2 = SortMarkSize.Width / 2;
-            if (SortOrder == SortOrder.Ascending)
+			Color markColor = _headerTextColor.IsEmpty ? SystemColors.ControlText : _headerTextColor;
+			using (Brush markBrush = new SolidBrush(markColor))
+			if (SortOrder == SortOrder.Ascending)
             {
                 Point[] points = new Point[] { new Point(x, y), new Point(x + SortMarkSize.Width, y), new Point(x + w2, y + SortMarkSize.Height) };
-                gr.FillPolygon(SystemBrushes.ControlDark, points);
+				gr.FillPolygon(markBrush, points);
             }
             else if (SortOrder == SortOrder.Descending)
             {
                 Point[] points = new Point[] { new Point(x - 1, y + SortMarkSize.Height), new Point(x + SortMarkSize.Width, y + SortMarkSize.Height), new Point(x + w2, y - 1) };
-                gr.FillPolygon(SystemBrushes.ControlDark, points);
+				gr.FillPolygon(markBrush, points);
             }
 		}
 

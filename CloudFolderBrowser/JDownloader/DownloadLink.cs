@@ -15,7 +15,7 @@ namespace CloudFolderBrowser.JDownloader
         }
         public string name { get; set; }
         public string url { get; set; }
-        public int size { get; set; } = -1;
+        public long size { get; set; } = -1;
         public string host { get; set; } = "http links";
         public bool enabled { get; set; } = true;
         //public long created { get; set; } = 20180407;

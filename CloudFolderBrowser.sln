@@ -21,9 +21,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YandexDiskSharp", "YandexDi
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebDAVClient", "WebDAVClient\WebDAVClient.csproj", "{F21EB154-C84E-4390-87CF-271E3DF4F059}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MegaApiClient", "C:\Users\MKso\Documents\GitHub\MegaApiClient\MegaApiClient\MegaApiClient.csproj", "{B53A833A-53ED-40A2-B119-2B5E459BEA96}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MegaApiClient", "MegaApiClient\MegaApiClient.csproj", "{B53A833A-53ED-40A2-B119-2B5E459BEA96}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "libcurl.NET", "..\libcurl.NET-master\src\libcurl.NET.csproj", "{869B83F8-4097-5DED-54A7-0F3ECB2F3C3F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudFolderBrowser.Tests", "CloudFolderBrowser.Tests\CloudFolderBrowser.Tests.csproj", "{C89D1B26-54FC-4D52-93A2-226A9C92075D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -47,6 +47,10 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C89D1B26-54FC-4D52-93A2-226A9C92075D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C89D1B26-54FC-4D52-93A2-226A9C92075D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C89D1B26-54FC-4D52-93A2-226A9C92075D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C89D1B26-54FC-4D52-93A2-226A9C92075D}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E0720F15-87F8-4E0B-BAF4-3355449EF5DE}.Debug_Linux|Any CPU.ActiveCfg = Debug|Any CPU
 		{E0720F15-87F8-4E0B-BAF4-3355449EF5DE}.Debug_Linux|Any CPU.Build.0 = Debug|Any CPU
 		{E0720F15-87F8-4E0B-BAF4-3355449EF5DE}.Debug_Linux|x64.ActiveCfg = Debug|Any CPU

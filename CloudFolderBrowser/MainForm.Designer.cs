@@ -106,9 +106,10 @@
             createArchive_button = new Button();
             appVersion_linkLabel = new LinkLabel();
             fogLink_button = new Button();
+            networkSettings_button = new Button();
             yadiskSpace_progressBar = new TextProgressBar();
             ProgressLoading_panel = new Panel();
-            MainProgressBar = new CircularProgressBar.CircularProgressBar();
+            MainProgressBar = new Theming.CircularProgressIndicator();
             enableProgressPanel_checkBox = new CheckBox();
             tableLayoutPanel1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer2).BeginInit();
@@ -786,22 +787,31 @@
             fogLink_button.Text = "FogLink";
             fogLink_button.UseVisualStyleBackColor = false;
             fogLink_button.Click += fogLink_button_Click;
-            // 
+            //
+            // networkSettings_button
+            //
+            networkSettings_button.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            networkSettings_button.FlatStyle = FlatStyle.Popup;
+            networkSettings_button.Location = new Point(704, 99);
+            networkSettings_button.Name = "networkSettings_button";
+            networkSettings_button.Size = new Size(102, 23);
+            networkSettings_button.TabIndex = 32;
+            networkSettings_button.Text = "Network settings";
+            networkSettings_button.UseVisualStyleBackColor = true;
+            networkSettings_button.Click += networkSettings_button_Click;
+            //
             // yadiskSpace_progressBar
-            // 
+            //
             yadiskSpace_progressBar.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            yadiskSpace_progressBar.BackColor = SystemColors.ControlDarkDark;
             yadiskSpace_progressBar.CustomText = "";
             yadiskSpace_progressBar.Location = new Point(459, 8);
             yadiskSpace_progressBar.Name = "yadiskSpace_progressBar";
-            yadiskSpace_progressBar.ProgressColor = Color.LimeGreen;
             yadiskSpace_progressBar.Size = new Size(382, 42);
             yadiskSpace_progressBar.TabIndex = 27;
-            yadiskSpace_progressBar.TextColor = Color.Black;
             yadiskSpace_progressBar.TextFont = new Font("Tahoma", 11.25F, FontStyle.Regular, GraphicsUnit.Point);
             yadiskSpace_progressBar.Visible = false;
             yadiskSpace_progressBar.VisualMode = ProgressBarDisplayMode.CustomText;
-            // 
+            //
             // ProgressLoading_panel
             // 
             ProgressLoading_panel.Controls.Add(MainProgressBar);
@@ -814,33 +824,16 @@
             // MainProgressBar
             // 
             MainProgressBar.Anchor = AnchorStyles.None;
-            MainProgressBar.AnimationFunction = WinFormAnimation.KnownAnimationFunctions.Liner;
             MainProgressBar.AnimationSpeed = 500;
             MainProgressBar.BackColor = Color.Transparent;
             MainProgressBar.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
             MainProgressBar.ForeColor = Color.FromArgb(64, 64, 64);
-            MainProgressBar.InnerColor = Color.Transparent;
-            MainProgressBar.InnerMargin = 5;
-            MainProgressBar.InnerWidth = 0;
             MainProgressBar.Location = new Point(125, 125);
-            MainProgressBar.MarqueeAnimationSpeed = 2000;
             MainProgressBar.Name = "MainProgressBar";
-            MainProgressBar.OuterColor = Color.Gray;
-            MainProgressBar.OuterMargin = -25;
-            MainProgressBar.OuterWidth = 0;
             MainProgressBar.ProgressColor = Color.FromArgb(255, 128, 0);
             MainProgressBar.ProgressWidth = 30;
-            MainProgressBar.SecondaryFont = new Font("Segoe UI", 36F, FontStyle.Regular, GraphicsUnit.Point);
             MainProgressBar.Size = new Size(250, 250);
-            MainProgressBar.StartAngle = 270;
-            MainProgressBar.SubscriptColor = Color.FromArgb(166, 166, 166);
-            MainProgressBar.SubscriptMargin = new Padding(10, -35, 0, 0);
-            MainProgressBar.SubscriptText = ".23";
-            MainProgressBar.SuperscriptColor = Color.FromArgb(166, 166, 166);
-            MainProgressBar.SuperscriptMargin = new Padding(10, 35, 0, 0);
-            MainProgressBar.SuperscriptText = "°C";
             MainProgressBar.TabIndex = 31;
-            MainProgressBar.TextMargin = new Padding(8, 8, 0, 0);
             MainProgressBar.Value = 68;
             // 
             // enableProgressPanel_checkBox
@@ -860,6 +853,7 @@
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(924, 850);
             Controls.Add(enableProgressPanel_checkBox);
+            Controls.Add(networkSettings_button);
             Controls.Add(yadiskSpace_progressBar);
             Controls.Add(fogLink_button);
             Controls.Add(editPublicFolderKey_button);
@@ -955,7 +949,8 @@
         private Button fogLink_button;
         private TextProgressBar yadiskSpace_progressBar;
         private Panel ProgressLoading_panel;
-        public CircularProgressBar.CircularProgressBar MainProgressBar;
+        public Theming.CircularProgressIndicator MainProgressBar;
         private CheckBox enableProgressPanel_checkBox;
+        private Button networkSettings_button;
     }
 }

@@ -260,7 +260,6 @@ namespace YandexDiskSharp.Models
         /// </summary>
         public DateTime Created => created;
 
-        #warning добавить ссылку на метод
         /// <summary>
         /// Объект со всеми атрибутами, заданными с помощью запроса <see cref="YandexDiskApi.PatchResources(string, IDictionary{string, string}, string[])"/>. 
         /// </summary>

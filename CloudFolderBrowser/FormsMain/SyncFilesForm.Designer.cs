@@ -34,10 +34,10 @@
             flatList2_checkBox = new CheckBox();
             getJdLinks_button = new Button();
             downloadFiles_button = new Button();
-            progressBar1 = new ProgressBar();
-            progressBar2 = new ProgressBar();
-            progressBar3 = new ProgressBar();
-            progressBar4 = new ProgressBar();
+            progressBar1 = new Theming.ThemedProgressBar();
+            progressBar2 = new Theming.ThemedProgressBar();
+            progressBar3 = new Theming.ThemedProgressBar();
+            progressBar4 = new Theming.ThemedProgressBar();
             backgroundWorker1 = new System.ComponentModel.BackgroundWorker();
             label1 = new Label();
             label2 = new Label();

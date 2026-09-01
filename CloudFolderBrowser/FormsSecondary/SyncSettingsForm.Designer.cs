@@ -43,6 +43,14 @@
             checkFileSizeError_numericUpDown = new NumericUpDown();
             groupBox6 = new GroupBox();
             groupBox7 = new GroupBox();
+            flareSolverr_groupBox = new GroupBox();
+            flareSolverrEnabled_checkBox = new CheckBox();
+            flareSolverrUrl_label = new Label();
+            flareSolverrUrl_textBox = new TextBox();
+            flareSolverrTimeout_label = new Label();
+            flareSolverrTimeout_numericUpDown = new NumericUpDown();
+            flareSolverrTest_button = new Button();
+            flareSolverrStatus_label = new Label();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)maxDownloadRetries_numericUpDown).BeginInit();
             ((System.ComponentModel.ISupportInitialize)maximumDownloads_numericUpDown).BeginInit();
@@ -55,6 +63,8 @@
             ((System.ComponentModel.ISupportInitialize)checkFileSizeError_numericUpDown).BeginInit();
             groupBox6.SuspendLayout();
             groupBox7.SuspendLayout();
+            flareSolverr_groupBox.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)flareSolverrTimeout_numericUpDown).BeginInit();
             SuspendLayout();
             // 
             // checkDownloadedFileSize_checkBox
@@ -209,12 +219,96 @@
             groupBox7.TabIndex = 31;
             groupBox7.TabStop = false;
             groupBox7.Text = "Filesize Check";
+            //
+            // flareSolverr_groupBox
+            //
+            flareSolverr_groupBox.Controls.Add(flareSolverrStatus_label);
+            flareSolverr_groupBox.Controls.Add(flareSolverrTest_button);
+            flareSolverr_groupBox.Controls.Add(flareSolverrTimeout_numericUpDown);
+            flareSolverr_groupBox.Controls.Add(flareSolverrTimeout_label);
+            flareSolverr_groupBox.Controls.Add(flareSolverrUrl_textBox);
+            flareSolverr_groupBox.Controls.Add(flareSolverrUrl_label);
+            flareSolverr_groupBox.Controls.Add(flareSolverrEnabled_checkBox);
+            flareSolverr_groupBox.Location = new Point(245, 197);
+            flareSolverr_groupBox.Name = "flareSolverr_groupBox";
+            flareSolverr_groupBox.Size = new Size(268, 160);
+            flareSolverr_groupBox.TabIndex = 32;
+            flareSolverr_groupBox.TabStop = false;
+            flareSolverr_groupBox.Text = "Cloudflare / FlareSolverr (optional)";
+            //
+            // flareSolverrEnabled_checkBox
+            //
+            flareSolverrEnabled_checkBox.AutoSize = true;
+            flareSolverrEnabled_checkBox.Location = new Point(12, 23);
+            flareSolverrEnabled_checkBox.Name = "flareSolverrEnabled_checkBox";
+            flareSolverrEnabled_checkBox.Size = new Size(126, 19);
+            flareSolverrEnabled_checkBox.TabIndex = 0;
+            flareSolverrEnabled_checkBox.Text = "Use FlareSolverr";
+            flareSolverrEnabled_checkBox.UseVisualStyleBackColor = true;
+            flareSolverrEnabled_checkBox.CheckedChanged += flareSolverrEnabled_checkBox_CheckedChanged;
+            //
+            // flareSolverrUrl_label
+            //
+            flareSolverrUrl_label.AutoSize = true;
+            flareSolverrUrl_label.Location = new Point(12, 47);
+            flareSolverrUrl_label.Name = "flareSolverrUrl_label";
+            flareSolverrUrl_label.Size = new Size(57, 15);
+            flareSolverrUrl_label.TabIndex = 1;
+            flareSolverrUrl_label.Text = "Server URL";
+            //
+            // flareSolverrUrl_textBox
+            //
+            flareSolverrUrl_textBox.Location = new Point(12, 64);
+            flareSolverrUrl_textBox.Name = "flareSolverrUrl_textBox";
+            flareSolverrUrl_textBox.PlaceholderText = "http://127.0.0.1:8191";
+            flareSolverrUrl_textBox.Size = new Size(244, 23);
+            flareSolverrUrl_textBox.TabIndex = 2;
+            //
+            // flareSolverrTimeout_label
+            //
+            flareSolverrTimeout_label.AutoSize = true;
+            flareSolverrTimeout_label.Location = new Point(12, 99);
+            flareSolverrTimeout_label.Name = "flareSolverrTimeout_label";
+            flareSolverrTimeout_label.Size = new Size(49, 15);
+            flareSolverrTimeout_label.TabIndex = 3;
+            flareSolverrTimeout_label.Text = "Timeout";
+            //
+            // flareSolverrTimeout_numericUpDown
+            //
+            flareSolverrTimeout_numericUpDown.Location = new Point(67, 96);
+            flareSolverrTimeout_numericUpDown.Maximum = new decimal(new int[] { 300, 0, 0, 0 });
+            flareSolverrTimeout_numericUpDown.Minimum = new decimal(new int[] { 10, 0, 0, 0 });
+            flareSolverrTimeout_numericUpDown.Name = "flareSolverrTimeout_numericUpDown";
+            flareSolverrTimeout_numericUpDown.Size = new Size(60, 23);
+            flareSolverrTimeout_numericUpDown.TabIndex = 4;
+            flareSolverrTimeout_numericUpDown.Value = new decimal(new int[] { 60, 0, 0, 0 });
+            //
+            // flareSolverrTest_button
+            //
+            flareSolverrTest_button.Location = new Point(139, 95);
+            flareSolverrTest_button.Name = "flareSolverrTest_button";
+            flareSolverrTest_button.Size = new Size(117, 25);
+            flareSolverrTest_button.TabIndex = 5;
+            flareSolverrTest_button.Text = "Test connection";
+            flareSolverrTest_button.UseVisualStyleBackColor = true;
+            flareSolverrTest_button.Click += flareSolverrTest_button_Click;
+            //
+            // flareSolverrStatus_label
+            //
+            flareSolverrStatus_label.AutoEllipsis = true;
+            flareSolverrStatus_label.Location = new Point(12, 128);
+            flareSolverrStatus_label.Name = "flareSolverrStatus_label";
+            flareSolverrStatus_label.Size = new Size(244, 20);
+            flareSolverrStatus_label.TabIndex = 6;
+            flareSolverrStatus_label.Tag = "muted";
+            flareSolverrStatus_label.Text = "Direct mode is active";
             // 
             // SyncSettingsForm
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(526, 382);
+            Controls.Add(flareSolverr_groupBox);
             Controls.Add(groupBox7);
             Controls.Add(groupBox6);
             Controls.Add(groupBox3);
@@ -236,6 +330,9 @@
             groupBox6.ResumeLayout(false);
             groupBox7.ResumeLayout(false);
             groupBox7.PerformLayout();
+            flareSolverr_groupBox.ResumeLayout(false);
+            flareSolverr_groupBox.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)flareSolverrTimeout_numericUpDown).EndInit();
             ResumeLayout(false);
         }
 
@@ -256,5 +353,13 @@
         private GroupBox groupBox6;
         private GroupBox groupBox7;
         private ToolTip toolTip1;
+        private GroupBox flareSolverr_groupBox;
+        private CheckBox flareSolverrEnabled_checkBox;
+        private Label flareSolverrUrl_label;
+        private TextBox flareSolverrUrl_textBox;
+        private Label flareSolverrTimeout_label;
+        private NumericUpDown flareSolverrTimeout_numericUpDown;
+        private Button flareSolverrTest_button;
+        private Label flareSolverrStatus_label;
     }
 }

@@ -189,7 +189,7 @@ namespace Aga.Controls.Tree.NodeControls
 				focusRect.Width--;
 				focusRect.Height--;
 				if (context.DrawSelection == DrawSelectionMode.None)
-					_focusPen.Color = SystemColors.ControlText;
+					_focusPen.Color = node.Tree != null ? node.Tree.ForeColor : SystemColors.ControlText;
 				else
 					_focusPen.Color = SystemColors.InactiveCaption;
 				context.Graphics.DrawRectangle(_focusPen, focusRect);
@@ -221,7 +221,10 @@ namespace Aga.Controls.Tree.NodeControls
 
 		private void CreateBrushes(TreeNodeAdv node, DrawContext context, string text, out Brush backgroundBrush, out Color textColor, out Font font, ref string label)
 		{
-			textColor = SystemColors.ControlText;
+			// TreeViewAdv is owner-drawn, so Control.ForeColor is not applied by
+			// WinForms automatically. Respect the tree's foreground color here so
+			// every consumer (including dark themes) gets readable node text.
+			textColor = node.Tree != null ? node.Tree.ForeColor : SystemColors.ControlText;
 			backgroundBrush = null;
 			font = context.Font;
 			if (context.DrawSelection == DrawSelectionMode.Active)
@@ -231,11 +234,11 @@ namespace Aga.Controls.Tree.NodeControls
 			}
 			else if (context.DrawSelection == DrawSelectionMode.Inactive)
 			{
-				textColor = SystemColors.ControlText;
+				textColor = node.Tree != null ? node.Tree.ForeColor : SystemColors.ControlText;
                 backgroundBrush = SystemBrushes.InactiveBorder;
 			}
 			else if (context.DrawSelection == DrawSelectionMode.FullRowSelect)
-				textColor = SystemColors.HighlightText;
+				textColor = node.Tree != null ? node.Tree.ForeColor : SystemColors.HighlightText;
 
 			if (!context.Enabled)
 				textColor = SystemColors.GrayText;

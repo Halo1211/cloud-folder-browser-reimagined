@@ -5,20 +5,46 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using CloudFolderBrowser.Networking;
 
 namespace CloudFolderBrowser
 {
     public class FogLink
     {
-        static HttpClient client = new HttpClient();
+        static HttpClient client = CreateClient();
+
+        private static HttpClient CreateClient()
+        {
+            return AppHttpClientFactory.CreateClient(TimeSpan.FromSeconds(45), routeKey: "FogLink");
+        }
+
+        public static void ReloadNetworkSettings()
+        {
+            Uri? address = client.BaseAddress;
+            HttpClient previous = client;
+            client = CreateClient();
+            client.BaseAddress = address;
+            previous.Dispose();
+        }
 
         public static Uri ServerAddress
         {
-            get => client.BaseAddress;
+            get => client.BaseAddress ?? throw new InvalidOperationException("FogLink server address is not configured.");
             set
             {
-                client = new HttpClient();                
-                client.BaseAddress = value;
+                if (!value.IsAbsoluteUri || value.Scheme is not ("http" or "https"))
+                    throw new ArgumentException("FogLink server address must be an absolute HTTP or HTTPS URL.", nameof(value));
+
+                var builder = new UriBuilder(value);
+                if (value.IsDefaultPort)
+                    builder.Port = -1;
+                if (!builder.Path.EndsWith('/'))
+                    builder.Path += "/";
+
+                HttpClient previous = client;
+                client = CreateClient();
+                client.BaseAddress = builder.Uri;
+                previous.Dispose();
             }
         }
 
@@ -32,7 +58,7 @@ namespace CloudFolderBrowser
 
                 return await response.Content.ReadAsStringAsync();
             }
-            catch(HttpRequestException ex)
+            catch(Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
                 var errorMessage = "Failed to encode url";
                 if (ex.HResult == -2147467259)
@@ -44,12 +70,13 @@ namespace CloudFolderBrowser
 
         public static async Task<List<FogLinkFile>> GetDecodedAsync(string url)
         {
-            HttpResponseMessage response = await client.GetAsync(
+            using HttpResponseMessage response = await client.GetAsync(
                 $"MegaPrivater/decode?encriptedLink={WebUtility.UrlEncode(url)}");
-            //response.EnsureSuccessStatusCode();
+            response.EnsureSuccessStatusCode();
 
             var nodes = JsonConvert.DeserializeObject<FogLinkFile[]>(await response.Content.ReadAsStringAsync());
-            return nodes.ToList();
+            return nodes?.ToList()
+                ?? throw new InvalidDataException("FogLink returned an empty or invalid response.");
         }
     }
 }

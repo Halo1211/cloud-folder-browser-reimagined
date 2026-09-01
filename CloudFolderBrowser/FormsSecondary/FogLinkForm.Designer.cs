@@ -35,7 +35,7 @@
             saveServerAddress_button = new Button();
             label1 = new Label();
             label2 = new Label();
-            progressBar1 = new ProgressBar();
+            progressBar1 = new Theming.ThemedProgressBar();
             SuspendLayout();
             // 
             // in_textBox

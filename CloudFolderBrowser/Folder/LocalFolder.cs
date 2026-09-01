@@ -12,22 +12,74 @@ namespace CloudFolderBrowser
 
         public LocalFolder() { }
 
-        public LocalFolder(DirectoryInfo di)
+        public LocalFolder(DirectoryInfo di, CancellationToken cancellationToken = default)
+            : this(di, new HashSet<string>(StringComparer.OrdinalIgnoreCase), cancellationToken)
         {
+        }
+
+        private LocalFolder(
+            DirectoryInfo di,
+            HashSet<string> visitedDirectories,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             Name = di.Name;
             Path = di.FullName + @"\";
             Modified = di.LastWriteTime;
             Created = di.CreationTime;
             Subfolders = new List<IFolder>();
             Files = new List<FileInfo>();
-            foreach (DirectoryInfo subdi in di.GetDirectories())
+
+            string canonicalPath = System.IO.Path.GetFullPath(di.FullName)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            if (!visitedDirectories.Add(canonicalPath))
+                return;
+
+            foreach (DirectoryInfo subdi in EnumerateDirectoriesSafely(di))
             {
-                Subfolders.Add(new LocalFolder(subdi));
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (subdi.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                        continue;
+                    Subfolders.Add(new LocalFolder(subdi, visitedDirectories, cancellationToken));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Skipping local folder {subdi.FullName}: {ex.Message}");
+                }
             }
-            foreach (FileInfo file in di.GetFiles())
+            foreach (FileInfo file in EnumerateFilesSafely(di))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Files.Add(file);
                 SizeTopDirectoryOnly += file.Length;
+            }
+        }
+
+        private static IEnumerable<DirectoryInfo> EnumerateDirectoriesSafely(DirectoryInfo directory)
+        {
+            try
+            {
+                return directory.EnumerateDirectories().ToArray();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Unable to enumerate local folder {directory.FullName}: {ex.Message}");
+                return Array.Empty<DirectoryInfo>();
+            }
+        }
+
+        private static IEnumerable<FileInfo> EnumerateFilesSafely(DirectoryInfo directory)
+        {
+            try
+            {
+                return directory.EnumerateFiles().ToArray();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Unable to enumerate files in {directory.FullName}: {ex.Message}");
+                return Array.Empty<FileInfo>();
             }
         }
 
