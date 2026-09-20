@@ -1,6 +1,7 @@
 using CloudFolderBrowser.Networking;
 using CloudFolderBrowser.Sync;
 using CloudFolderBrowser.Theming;
+using CloudFolderBrowser.FormsSecondary;
 using Aga.Controls.Tree;
 using Aga.Controls.Tree.NodeControls;
 using YandexDiskSharp.Models;
@@ -196,6 +197,38 @@ public sealed class BugRegressionTests : IDisposable
         Assert.Equal(new Size(72, 72), bitmap.Size);
     }
 
+    [Fact]
+    public void SyncSettingsDownloadCard_ContainsEveryDownloadOption()
+    {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using var form = new SyncSettingsForm(null);
+        form.StartPosition = FormStartPosition.Manual;
+        form.Location = new Point(-32000, -32000);
+        form.ShowInTaskbar = false;
+        form.Show();
+        ThemeManager.Apply(form);
+        CreateHandles(form);
+        form.PerformLayout();
+        Application.DoEvents();
+
+        Label speedLimitLabel = FindControls<Label>(form)
+            .Single(label => label.Text == "Speed limit (KiB/s)");
+        TableLayoutPanel downloadBody = Assert.IsType<TableLayoutPanel>(speedLimitLabel.Parent);
+        ModernCard downloadCard = Assert.IsType<ModernCard>(downloadBody.Parent);
+        Rectangle visibleCard = downloadCard.ClientRectangle;
+
+        Assert.All(
+            downloadBody.Controls.Cast<Control>(),
+            control =>
+            {
+                Rectangle screenBounds = downloadBody.RectangleToScreen(control.Bounds);
+                Rectangle cardBounds = downloadCard.RectangleToClient(screenBounds);
+                Assert.True(
+                    visibleCard.Contains(cardBounds),
+                    $"{control.GetType().Name} '{control.Text}' at {cardBounds} is clipped by {visibleCard}.");
+            });
+    }
+
     public void Dispose()
     {
         ThemeManager.SetMode(AppThemeMode.System);
@@ -224,5 +257,24 @@ public sealed class BugRegressionTests : IDisposable
         int accent = ThemeManager.Palette.Accent.ToArgb();
         return Enumerable.Range(0, bitmap.Width)
             .Count(x => bitmap.GetPixel(x, y).ToArgb() == accent);
+    }
+
+    private static IEnumerable<TControl> FindControls<TControl>(Control root)
+        where TControl : Control
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is TControl match)
+                yield return match;
+            foreach (TControl descendant in FindControls<TControl>(child))
+                yield return descendant;
+        }
+    }
+
+    private static void CreateHandles(Control control)
+    {
+        control.CreateControl();
+        foreach (Control child in control.Controls)
+            CreateHandles(child);
     }
 }

@@ -476,35 +476,35 @@ namespace CloudFolderBrowser.FormsSecondary
         private Control BuildDownloadBody()
         {
             var body = CreateCardBody(5);
-            body.Controls.Add(CreateFieldLabel("Concurrent downloads"), 0, 0);
+            body.Controls.Add(CreateFieldLabel("Concurrent downloads", 2), 0, 0);
             maximumDownloads_numericUpDown.Dock = DockStyle.Fill;
-            maximumDownloads_numericUpDown.Margin = new Padding(8, 4, 0, 7);
+            maximumDownloads_numericUpDown.Margin = new Padding(8, 0, 0, 1);
             body.Controls.Add(maximumDownloads_numericUpDown, 1, 0);
 
-            body.Controls.Add(CreateFieldLabel("Segments per large file"), 0, 1);
+            body.Controls.Add(CreateFieldLabel("Segments per large file", 2), 0, 1);
             maximumSegments_numericUpDown.Minimum = 1;
             maximumSegments_numericUpDown.Maximum = 8;
             maximumSegments_numericUpDown.Dock = DockStyle.Fill;
-            maximumSegments_numericUpDown.Margin = new Padding(8, 4, 0, 7);
+            maximumSegments_numericUpDown.Margin = new Padding(8, 0, 0, 1);
             body.Controls.Add(maximumSegments_numericUpDown, 1, 1);
 
-            body.Controls.Add(CreateFieldLabel("Existing file"), 0, 2);
+            body.Controls.Add(CreateFieldLabel("Existing file", 2), 0, 2);
             overwriteMode_comboBox.Dock = DockStyle.Fill;
-            overwriteMode_comboBox.Margin = new Padding(8, 4, 0, 7);
+            overwriteMode_comboBox.Margin = new Padding(8, 0, 0, 0);
             body.Controls.Add(overwriteMode_comboBox, 1, 2);
 
             folderNewFiles_checkBox.AutoSize = true;
             folderNewFiles_checkBox.Text = "Use a dated “New Files” folder";
-            folderNewFiles_checkBox.Margin = new Padding(0, 8, 0, 0);
+            folderNewFiles_checkBox.Margin = new Padding(0);
             body.SetColumnSpan(folderNewFiles_checkBox, 2);
             body.Controls.Add(folderNewFiles_checkBox, 0, 3);
 
-            body.Controls.Add(CreateFieldLabel("Speed limit (KiB/s)"), 0, 4);
+            body.Controls.Add(CreateFieldLabel("Speed limit (KiB/s)", 2), 0, 4);
             bandwidthLimit_numericUpDown.Minimum = 0;
             bandwidthLimit_numericUpDown.Maximum = 1_000_000;
             bandwidthLimit_numericUpDown.ThousandsSeparator = true;
             bandwidthLimit_numericUpDown.Dock = DockStyle.Fill;
-            bandwidthLimit_numericUpDown.Margin = new Padding(8, 4, 0, 0);
+            bandwidthLimit_numericUpDown.Margin = new Padding(8, 0, 0, 0);
             body.Controls.Add(bandwidthLimit_numericUpDown, 1, 4);
             return body;
         }
@@ -654,13 +654,13 @@ namespace CloudFolderBrowser.FormsSecondary
             return body;
         }
 
-        private static Label CreateFieldLabel(string text)
+        private static Label CreateFieldLabel(string text, int topMargin = 8)
         {
             return new Label
             {
                 AutoSize = true,
                 Text = text,
-                Margin = new Padding(0, 8, 0, 0)
+                Margin = new Padding(0, topMargin, 0, 0)
             };
         }
     }

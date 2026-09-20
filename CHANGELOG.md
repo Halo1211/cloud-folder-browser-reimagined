@@ -2,6 +2,12 @@
 
 All notable changes to Cloud Folder Browser Reimagined are documented here.
 
+## [1.0.1] - 2026-09-20
+
+### Fixed
+
+- Prevented the final download-behavior option from being clipped at higher Windows display scaling settings.
+
 ## [1.0.0] - 2026-09-01
 
 ### Added

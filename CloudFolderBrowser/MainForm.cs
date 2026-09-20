@@ -172,7 +172,7 @@ namespace CloudFolderBrowser
         private static string GetApplicationVersion()
         {
             Version? version = typeof(MainForm).Assembly.GetName().Version;
-            return version == null ? "1.0.0" : $"{version.Major}.{version.Minor}.{version.Build}";
+            return version == null ? "1.0.1" : $"{version.Major}.{version.Minor}.{version.Build}";
         }
 
         public bool UseProgressPanel = false;
