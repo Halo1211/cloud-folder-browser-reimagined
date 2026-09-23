@@ -5,8 +5,10 @@
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
+    using System.IO;
     using System.Linq;
     using System.Runtime.Serialization;
+    using System.Security.Cryptography;
 
     [DebuggerDisplay("NodeInfo - Type: {Type} - Name: {Name} - Id: {Id}")]
   internal class NodeInfo : INodeInfo
@@ -72,6 +74,7 @@
   {
     private byte[] masterKey;
     private List<SharedKey> sharedKeys;
+    private string selectedKeyHandle;
 
     public Node(byte[] masterKey, ref List<SharedKey> sharedKeys)
     {
@@ -128,8 +131,9 @@
     public void OnDeserialized(StreamingContext ctx)
     {
       // Add key from incoming sharing.
-      if (this.SharingKey != null && this.sharedKeys.Any(x => x.Id == this.Id) == false)
+      if (this.SharingKey != null && this.sharedKeys?.Any(x => x.Id == this.Id) != true)
       {
+        this.sharedKeys ??= new List<SharedKey>();
         this.sharedKeys.Add(new SharedKey(this.Id, this.SharingKey));
       }
 
@@ -137,49 +141,69 @@
 
       if (this.Type == NodeType.File || this.Type == NodeType.Directory)
       {
-        // There are cases where the SerializedKey property contains multiple keys separated with /
-        // This can occur when a folder is shared and the parent is shared too.
-        // Both keys are working so we use the first one
-        string serializedKey = this.SerializedKey.Split('/')[0];
-        int splitPosition = serializedKey.IndexOf(":", StringComparison.Ordinal);
-        byte[] encryptedKey = serializedKey.Substring(splitPosition + 1).FromBase64();
-
-        // If node is shared, we need to retrieve shared masterkey
-        if (this.sharedKeys != null)
+        if (string.IsNullOrWhiteSpace(this.SerializedKey))
         {
-          string handle = serializedKey.Substring(0, splitPosition);
-          SharedKey sharedKey = this.sharedKeys.FirstOrDefault(x => x.Id == handle);
-          if (sharedKey != null)
+          throw new InvalidDataException($"MEGA node '{this.Id}' has no encrypted key.");
+        }
+
+        // Shared nodes can have encrypted keys for multiple owners.
+        foreach (string serializedKey in this.SerializedKey.Split('/'))
+        {
+          try
           {
-            this.masterKey = Crypto.DecryptKey(sharedKey.Key.FromBase64(), this.masterKey);
-            if (this.Type == NodeType.Directory)
+            int splitPosition = serializedKey.IndexOf(':');
+            if (splitPosition < 0)
             {
-              this.SharedKey = this.masterKey;
+              continue;
+            }
+
+            string handle = serializedKey.Substring(0, splitPosition);
+            byte[] encryptedKey = serializedKey.Substring(splitPosition + 1).FromBase64();
+            int expectedLength = this.Type == NodeType.File ? 32 : 16;
+            if (encryptedKey.Length != expectedLength)
+            {
+              continue;
+            }
+
+            SharedKey sharedKey = this.sharedKeys?.FirstOrDefault(x => x.Id == handle);
+            byte[] keyForEntry = sharedKey == null
+              ? this.masterKey
+              : Crypto.DecryptKey(sharedKey.Key.FromBase64(), this.masterKey);
+            byte[] fullKey = Crypto.DecryptKey(encryptedKey, keyForEntry);
+            byte[] nodeKey;
+            byte[] iv = null;
+            byte[] metaMac = null;
+            if (this.Type == NodeType.File)
+            {
+              Crypto.GetPartsFromDecryptedKey(fullKey, out iv, out metaMac, out nodeKey);
             }
             else
             {
-              this.SharedKey = Crypto.DecryptKey(encryptedKey, this.masterKey);
+              nodeKey = fullKey;
             }
+
+            Attributes attributes = Crypto.DecryptAttributes(this.SerializedAttributes.FromBase64(), nodeKey);
+            this.FullKey = fullKey;
+            this.Key = nodeKey;
+            this.Iv = iv;
+            this.MetaMac = metaMac;
+            this.Attributes = attributes;
+            this.selectedKeyHandle = handle;
+            if (sharedKey != null)
+            {
+              this.SharedKey = this.Type == NodeType.Directory ? keyForEntry : fullKey;
+            }
+            return;
+          }
+          catch (Exception ex) when (ex is FormatException || ex is ArgumentException
+            || ex is CryptographicException || ex is JsonException || ex is InvalidDataException)
+          {
+            // Try the next key supplied for this node.
           }
         }
 
-        this.FullKey = Crypto.DecryptKey(encryptedKey, this.masterKey);
-
-        if (this.Type == NodeType.File)
-        {
-          byte[] iv, metaMac, fileKey;
-          Crypto.GetPartsFromDecryptedKey(this.FullKey, out iv, out metaMac, out fileKey);
-
-          this.Iv = iv;
-          this.MetaMac = metaMac;
-          this.Key = fileKey;
-        }
-        else
-        {
-          this.Key = this.FullKey;
-        }
-
-        this.Attributes = Crypto.DecryptAttributes(this.SerializedAttributes.FromBase64(), this.Key);
+        throw new InvalidDataException(
+          $"Unable to decrypt attributes for MEGA node '{this.Id}' with any available key.");
       }
     }
 
@@ -189,9 +213,7 @@
     {
       get
       {
-        string serializedKey = this.SerializedKey.Split('/')[0];
-        int splitPosition = serializedKey.IndexOf(":", StringComparison.Ordinal);
-        return serializedKey.Substring(0, splitPosition) == this.Id;
+        return this.selectedKeyHandle == this.Id;
       }
     }
   }

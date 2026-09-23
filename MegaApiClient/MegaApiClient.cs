@@ -7,7 +7,6 @@
     using System.IO;
     using System.Linq;
     using System.Runtime.Serialization;
-    using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -703,9 +702,22 @@
             GetNodesRequest getNodesRequest = new GetNodesRequest(shareId);
             GetNodesResponse getNodesResponse = this.Request<GetNodesResponse>(getNodesRequest, key);
 
-            List<Node> filteredNodes = GetChildNodes(getNodesResponse.Nodes.Where(x => x.Id == lastId).FirstOrDefault(), getNodesResponse.Nodes);
+            var nodeIds = new HashSet<string>(getNodesResponse.Nodes.Select(x => x.Id));
+            Node selectedNode = string.IsNullOrEmpty(lastId)
+                ? getNodesResponse.Nodes.FirstOrDefault(x => x.Type == NodeType.Directory
+                    && (x.IsShareRoot || x.ParentId == null || !nodeIds.Contains(x.ParentId)))
+                : getNodesResponse.Nodes.FirstOrDefault(x => x.Id == lastId);
+            if (selectedNode == null)
+            {
+                throw new InvalidDataException("The selected MEGA folder node was not found in the share.");
+            }
+            var filteredNodes = new List<Node> { selectedNode };
+            if (selectedNode.Type == NodeType.Directory)
+            {
+                filteredNodes.AddRange(GetChildNodes(selectedNode, getNodesResponse.Nodes));
+            }
 
-            return filteredNodes; // getNodesResponse.Nodes.Where(x => x.Id == lastId || x.ParentId == lastId).Select(x => new PublicNode(x, shareId)).OfType<INode>();
+            return filteredNodes.Select(x => new PublicNode(x, shareId)).OfType<INode>();
         }
 
         public IEnumerable<INode> GetNodesFromLink(Uri uri, out string lastId)
@@ -1188,57 +1200,49 @@
             }
         }
 
-        private void GetPartsFromUri(Uri uri, out string id, out byte[] iv, out byte[] metaMac, out byte[] key, out string lastId)
-        {           
-            //Regex uriRegex = new Regex("/(?<type>(file|folder))/(?<id>[^#]+)#(?<key>[^$/]+)(/folder/)?(?<lastid>[^/]+)");
-            Regex uriRegex = new Regex("(?<type>folder)/(?<id>.+)#(?<key>[^/]+)(/folder/)?(?<lastid>[^/]+)?");
-            Match match = uriRegex.Match(uri.ToString());
-            if (match.Success == false)
+        internal void GetPartsFromUri(Uri uri, out string id, out byte[] iv, out byte[] metaMac, out byte[] key, out string lastId)
+        {
+            string[] path = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            string[] fragment = uri.Fragment.TrimStart('#').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (path.Length != 2 || !path[0].Equals("folder", StringComparison.OrdinalIgnoreCase)
+                || fragment.Length != 1 && fragment.Length != 3
+                || fragment.Length == 3 && !fragment[1].Equals("folder", StringComparison.OrdinalIgnoreCase)
+                    && !fragment[1].Equals("file", StringComparison.OrdinalIgnoreCase))
             {
-                throw new ArgumentException(string.Format("Invalid uri. Unable to extract Id and Key from the uri {0}", uri));
+                throw new ArgumentException("Invalid MEGA folder link.", nameof(uri));
             }
 
-            id = match.Groups["id"].Value;
-            lastId = match.Groups["lastid"].Value;
-            byte[] decryptedKey = match.Groups["key"].Value.FromBase64();
-            var isFolder = match.Groups["type"].Value == "folder";
+            id = Uri.UnescapeDataString(path[1]);
+            lastId = fragment.Length == 3 ? Uri.UnescapeDataString(fragment[2]) : string.Empty;
+            key = fragment[0].FromBase64();
+            if (key.Length != 16 || string.IsNullOrWhiteSpace(id) || fragment[0].Length == 0
+                || fragment.Length == 3 && string.IsNullOrWhiteSpace(lastId))
+            {
+                throw new ArgumentException("Invalid MEGA folder link.", nameof(uri));
+            }
 
-            if (isFolder)
-            {
-                iv = null;
-                metaMac = null;
-                key = decryptedKey;
-            }
-            else
-            {
-                Crypto.GetPartsFromDecryptedKey(decryptedKey, out iv, out metaMac, out key);
-            }
+            iv = null;
+            metaMac = null;
         }
 
-        private void GetPartsFromUri(Uri uri, out string id, out byte[] iv, out byte[] metaMac, out byte[] key)
+        internal void GetPartsFromUri(Uri uri, out string id, out byte[] iv, out byte[] metaMac, out byte[] key)
         {
-            Regex uriRegex = new Regex("(?<type>folder?)/(?<id>.+)#(?<key>[^/]+)/");
-            Match match = uriRegex.Match(uri.ToString());
-            if (match.Success == false)
+            string[] path = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            string[] fragment = uri.Fragment.TrimStart('#').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (path.Length != 2 || !path[0].Equals("file", StringComparison.OrdinalIgnoreCase)
+                || fragment.Length != 1 || string.IsNullOrWhiteSpace(path[1]))
             {
-                throw new ArgumentException(string.Format("Invalid uri. Unable to extract Id and Key from the uri {0}", uri));
+                throw new ArgumentException("Invalid MEGA file link.", nameof(uri));
             }
 
-            id = match.Groups["id"].Value;
-
-            byte[] decryptedKey = match.Groups["key"].Value.FromBase64();
-            var isFolder = match.Groups["type"].Value == "folder";
-
-            if (isFolder)
+            id = Uri.UnescapeDataString(path[1]);
+            byte[] decryptedKey = fragment[0].FromBase64();
+            if (decryptedKey.Length != 32)
             {
-                iv = null;
-                metaMac = null;
-                key = decryptedKey;
+                throw new ArgumentException("Invalid MEGA file link.", nameof(uri));
             }
-            else
-            {
-                Crypto.GetPartsFromDecryptedKey(decryptedKey, out iv, out metaMac, out key);
-            }
+
+            Crypto.GetPartsFromDecryptedKey(decryptedKey, out iv, out metaMac, out key);
         }
 
         private IEnumerable<int> ComputeChunksSizesToUpload(long[] chunksPositions, long streamLength)

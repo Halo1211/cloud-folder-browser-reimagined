@@ -2,6 +2,14 @@
 
 All notable changes to Cloud Folder Browser Reimagined are documented here.
 
+## [1.0.2] - 2026-09-23
+
+### Fixed
+
+- Corrected MEGA shared-folder node decryption when a node carries multiple encrypted keys, preventing deserialization errors from appearing as file names.
+- Preserved shared keys across child nodes and recognized the selected share root correctly.
+- Fixed MEGA folder and file link parsing, including root folders and links to selected children.
+
 ## [1.0.1] - 2026-09-20
 
 ### Fixed

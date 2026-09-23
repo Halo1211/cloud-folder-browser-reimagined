@@ -3,7 +3,7 @@
   <h1>Cloud Folder Browser Reimagined</h1>
   <p>A Windows desktop application for browsing public cloud folders, comparing them with local storage, and downloading only what is needed.</p>
   <p>
-    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.1-D6A15B" alt="Version 1.0.1"></a>
+    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.2-D6A15B" alt="Version 1.0.2"></a>
     <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml"><img src="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-20201D" alt="GPL-3.0 license"></a>
     <a href="#requirements"><img src="https://img.shields.io/badge/platform-Windows%20x64-20201D" alt="Windows x64"></a>

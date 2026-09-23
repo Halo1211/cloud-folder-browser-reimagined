@@ -13,7 +13,7 @@
     public NodeConverter(byte[] masterKey, ref List<SharedKey> sharedKeys)
     {
       this.masterKey = masterKey;
-      this.sharedKeys = sharedKeys;
+      this.sharedKeys = sharedKeys ?? new List<SharedKey>();
     }
 
     public override bool CanConvert(Type objectType)

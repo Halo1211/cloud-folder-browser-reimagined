@@ -1,6 +1,7 @@
 ﻿namespace CG.Web.MegaApiClient
 {
   using System;
+  using System.IO;
   using System.Security.Cryptography;
 
   using CG.Web.MegaApiClient.Cryptography;
@@ -126,23 +127,26 @@
     public static Attributes DecryptAttributes(byte[] attributes, byte[] nodeKey)
     {
       byte[] decryptedAttributes = DecryptAes(attributes, nodeKey);
-
-      // Remove MEGA prefix
-      try
+      string data = decryptedAttributes.ToUTF8String();
+      if (!data.StartsWith("MEGA", StringComparison.Ordinal))
       {
-        string json = decryptedAttributes.ToUTF8String().Substring(4);
-        int nullTerminationIndex = json.IndexOf('\0');
-        if (nullTerminationIndex != -1)
-        {
-          json = json.Substring(0, nullTerminationIndex);
-        }
+        throw new InvalidDataException("MEGA node attributes could not be decrypted with this key.");
+      }
 
-        return JsonConvert.DeserializeObject<Attributes>(json);
-      }
-      catch (Exception ex)
+      string json = data.Substring(4);
+      int nullTerminationIndex = json.IndexOf('\0');
+      if (nullTerminationIndex != -1)
       {
-        return new Attributes(string.Format("Attribute deserialization failed: {0}", ex.Message));
+        json = json.Substring(0, nullTerminationIndex);
       }
+
+      Attributes result = JsonConvert.DeserializeObject<Attributes>(json);
+      if (string.IsNullOrEmpty(result?.Name))
+      {
+        throw new InvalidDataException("MEGA node attributes do not contain a file name.");
+      }
+
+      return result;
     }
 
     #endregion
