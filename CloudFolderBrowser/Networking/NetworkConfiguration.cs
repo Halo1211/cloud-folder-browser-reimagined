@@ -80,6 +80,13 @@ public sealed record NetworkConfiguration
 
     public void Validate()
     {
+        if (!Enum.IsDefined(DnsProvider))
+            throw new ArgumentOutOfRangeException(nameof(DnsProvider));
+        if (!Enum.IsDefined(DnsTransport))
+            throw new ArgumentOutOfRangeException(nameof(DnsTransport));
+        if (!Enum.IsDefined(ProxyMode))
+            throw new ArgumentOutOfRangeException(nameof(ProxyMode));
+
         if (DnsProvider == DnsProviderMode.Custom)
         {
             switch (DnsTransport)

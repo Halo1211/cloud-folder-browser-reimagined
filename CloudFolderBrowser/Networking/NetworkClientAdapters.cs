@@ -16,12 +16,14 @@ public static class NetworkClientAdapters
         return new MegaApiClient(webClient);
     }
 
-    public static Client CreateWebDavClient(NetworkCredential credential, TimeSpan? timeout = null)
+    public static Client CreateWebDavClient(NetworkCredential credential, TimeSpan? timeout = null,
+        CloudflareSession? cloudflareSession = null)
     {
         var handler = AppHttpClientFactory.CreateHandler(
             DecompressionMethods.Deflate | DecompressionMethods.GZip,
             serverCredentials: credential,
             routeKey: "WebDav");
+        cloudflareSession?.ApplyCookies(handler.CookieContainer);
         var httpClient = new HttpClient(handler)
         {
             Timeout = timeout ?? TimeSpan.FromMinutes(10)

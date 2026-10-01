@@ -125,7 +125,7 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
         if (marker < 0 || marker + 1 >= segments.Length)
             throw new ArgumentException("The AllSync URL has no public share key.", nameof(url));
         string shareId = Uri.UnescapeDataString(segments[marker + 1]);
-        string path = HttpUtility.UrlDecode(HttpUtility.ParseQueryString(source.Query)["path"] ?? "/")
+        string path = (HttpUtility.ParseQueryString(source.Query)["path"] ?? "/")
             .Replace('\\', '/');
         if (!path.StartsWith('/'))
             path = "/" + path;
@@ -144,7 +144,7 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
         CloudflareSession? cloudflare)
     {
         var credential = new NetworkCredential(share.ShareId, string.IsNullOrEmpty(password) ? "null" : password);
-        Client client = NetworkClientAdapters.CreateWebDavClient(credential);
+        Client client = NetworkClientAdapters.CreateWebDavClient(credential, cloudflareSession: cloudflare);
         client.Server = share.Authority;
         client.BasePath = "/public.php/webdav/";
         client.UserAgent = cloudflare?.UserAgent
@@ -155,9 +155,6 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
             ["Accept"] = "*/*",
             ["Accept-Language"] = "en-US,en;q=0.5"
         };
-        string? cookie = cloudflare?.GetCookieHeader(new Uri(share.Authority));
-        if (!string.IsNullOrWhiteSpace(cookie))
-            headers["Cookie"] = cookie;
         client.CustomHeaders = headers;
         return client;
     }
@@ -215,7 +212,8 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
                 item.ContentLength ?? 0)
             {
                 Path = path,
-                PublicUrl = new Uri(directUrl)
+                PublicUrl = new Uri(directUrl),
+                HasKnownSize = item.ContentLength.HasValue
             };
             parent.AddFile(file);
             parent.SizeTopDirectoryOnly += file.Size;
@@ -224,7 +222,7 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
     }
 
     private static string DecodeItemPath(string href) =>
-        HttpUtility.UrlDecode(href).Replace("/public.php/webdav", "", StringComparison.OrdinalIgnoreCase)
+        Uri.UnescapeDataString(href).Replace("/public.php/webdav", "", StringComparison.OrdinalIgnoreCase)
             .Replace('\\', '/');
 
     private static string NormalizeFolderPath(string path) =>

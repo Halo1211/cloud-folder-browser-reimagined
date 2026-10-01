@@ -66,13 +66,7 @@ namespace CloudFolderBrowser
             DialogResult overwriteFile = DialogResult.Yes;
             if (file.Exists)
             {
-                var identicalSize = file.Length == Node.Size;
-
-                if(!identicalSize)
-                {
-                    overwriteFile = DialogResult.Yes;
-                }
-                else if (!ForceOverwrite)
+                if (!ForceOverwrite)
                     switch (ParentDownload.OverwriteMode)
                     {
                         case 0:
@@ -142,6 +136,10 @@ namespace CloudFolderBrowser
                                 SavePath,
                                 ParentDownload.CancellationTokenSource.Token);
                             postProcessingMessage = result.Processed ? string.Empty : result.Message;
+                        }
+                        catch (OperationCanceledException) when (ParentDownload.CancellationTokenSource.IsCancellationRequested)
+                        {
+                            postProcessingMessage = "Post-processing cancelled; the downloaded file is complete.";
                         }
                         catch (Exception ex) when (ex is IOException
                             or InvalidDataException

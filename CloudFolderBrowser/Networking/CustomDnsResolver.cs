@@ -16,6 +16,10 @@ public readonly record struct DnsServerEndpoint(IPAddress Address, int Port)
             return new DnsServerEndpoint(direct, 53);
 
         if (Uri.TryCreate("udp://" + value, UriKind.Absolute, out Uri? uri)
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && uri.AbsolutePath == "/"
+            && string.IsNullOrEmpty(uri.Query)
+            && string.IsNullOrEmpty(uri.Fragment)
             && IPAddress.TryParse(uri.Host, out IPAddress? address)
             && uri.Port is >= 1 and <= 65535)
         {
@@ -53,6 +57,7 @@ public sealed class CustomDnsResolver : IAppDnsResolver
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        cancellationToken.ThrowIfCancellationRequested();
         if (IPAddress.TryParse(host, out IPAddress? literal))
             return new[] { literal };
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
@@ -77,7 +82,10 @@ public sealed class CustomDnsResolver : IAppDnsResolver
         uint ttl = Math.Min(ipv4.Result.Answer.MinimumTtl, ipv6.Result.Answer.MinimumTtl);
         if (ttl == uint.MaxValue)
             ttl = 60;
-        Cache[cacheKey] = new CacheEntry(addresses, DateTime.UtcNow.AddSeconds(Math.Clamp(ttl, 5, 3600)));
+        if (ttl > 0)
+            Cache[cacheKey] = new CacheEntry(addresses, DateTime.UtcNow.AddSeconds(Math.Min(ttl, 3600)));
+        else
+            Cache.TryRemove(cacheKey, out _);
         return Order(addresses, preferIpv6);
     }
 
@@ -96,7 +104,7 @@ public sealed class CustomDnsResolver : IAppDnsResolver
         {
             await udp.SendAsync(request, timeoutCts.Token).ConfigureAwait(false);
             UdpReceiveResult result = await udp.ReceiveAsync(timeoutCts.Token).ConfigureAwait(false);
-            return ParseResponse(result.Buffer, id, type);
+            return ParseResponse(result.Buffer, id, type, host);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -147,35 +155,40 @@ public sealed class CustomDnsResolver : IAppDnsResolver
         return stream.ToArray();
     }
 
-    internal static DnsAnswer ParseResponse(byte[] response, ushort expectedId, ushort expectedType)
+    internal static DnsAnswer ParseResponse(
+        byte[] response, ushort expectedId, ushort expectedType, string? expectedHost = null)
     {
         if (response.Length < 12 || ReadUInt16(response, 0) != expectedId)
             throw new InvalidDataException("DNS server returned a malformed or unrelated response.");
 
         ushort flags = ReadUInt16(response, 2);
-        if ((flags & 0x8000) == 0 || (flags & 0x0200) != 0)
+        if ((flags & 0x8000) == 0 || (flags & 0x0200) != 0 || (flags & 0x7800) != 0)
             throw new InvalidDataException("DNS response is incomplete or truncated.");
         int responseCode = flags & 0x000F;
+        int questionCount = ReadUInt16(response, 4);
+        if (questionCount != 1)
+            throw new InvalidDataException("DNS response does not contain the requested question.");
+        int answerCount = ReadUInt16(response, 6);
+        int offset = 12;
+        string questionName = ReadName(response, ref offset);
+        EnsureAvailable(response, offset, 4);
+        ushort questionType = ReadUInt16(response, offset);
+        ushort questionClass = ReadUInt16(response, offset + 2);
+        offset += 4;
+        if (questionType != expectedType || questionClass != 1
+            || expectedHost != null && !questionName.Equals(expectedHost.TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("DNS response question does not match the request.");
         if (responseCode == 3)
             return new DnsAnswer(Array.Empty<IPAddress>(), uint.MaxValue);
         if (responseCode != 0)
             throw new InvalidDataException($"DNS server returned error code {responseCode}.");
 
-        int questionCount = ReadUInt16(response, 4);
-        int answerCount = ReadUInt16(response, 6);
-        int offset = 12;
-        for (int i = 0; i < questionCount; i++)
-        {
-            SkipName(response, ref offset);
-            EnsureAvailable(response, offset, 4);
-            offset += 4;
-        }
-
-        var addresses = new List<IPAddress>();
+        var records = new List<(string Owner, IPAddress Address, uint Ttl)>();
+        var aliases = new List<(string Owner, string Target, uint Ttl)>();
         uint minimumTtl = uint.MaxValue;
         for (int i = 0; i < answerCount; i++)
         {
-            SkipName(response, ref offset);
+            string owner = ReadName(response, ref offset);
             EnsureAvailable(response, offset, 10);
             ushort type = ReadUInt16(response, offset);
             ushort recordClass = ReadUInt16(response, offset + 2);
@@ -187,33 +200,84 @@ public sealed class CustomDnsResolver : IAppDnsResolver
             if (recordClass == 1 && type == expectedType
                 && ((type == TypeA && length == 4) || (type == TypeAaaa && length == 16)))
             {
-                addresses.Add(new IPAddress(response.AsSpan(offset, length)));
-                minimumTtl = Math.Min(minimumTtl, ttl);
+                records.Add((owner, new IPAddress(response.AsSpan(offset, length)), ttl));
+            }
+            else if (recordClass == 1 && type == 5)
+            {
+                int aliasOffset = offset;
+                string target = ReadName(response, ref aliasOffset);
+                if (aliasOffset != offset + length)
+                    throw new InvalidDataException("DNS response contains an invalid CNAME record.");
+                aliases.Add((owner, target, ttl));
             }
             offset += length;
+        }
+        var reachable = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
+        {
+            [questionName] = uint.MaxValue
+        };
+        for (int pass = 0; pass < aliases.Count; pass++)
+        {
+            bool changed = false;
+            foreach (var alias in aliases)
+            {
+                if (!reachable.TryGetValue(alias.Owner, out uint parentTtl))
+                    continue;
+                uint aliasTtl = Math.Min(parentTtl, alias.Ttl);
+                if (!reachable.TryGetValue(alias.Target, out uint currentTtl) || aliasTtl < currentTtl)
+                {
+                    reachable[alias.Target] = aliasTtl;
+                    changed = true;
+                }
+            }
+            if (!changed)
+                break;
+        }
+        var addresses = new List<IPAddress>();
+        foreach (var record in records)
+        {
+            if (!reachable.TryGetValue(record.Owner, out uint aliasTtl))
+                continue;
+            addresses.Add(record.Address);
+            minimumTtl = Math.Min(minimumTtl, Math.Min(aliasTtl, record.Ttl));
         }
         return new DnsAnswer(addresses.ToArray(), minimumTtl);
     }
 
-    private static void SkipName(byte[] buffer, ref int offset)
+    private static string ReadName(byte[] buffer, ref int offset)
     {
-        int labels = 0;
+        var labels = new List<string>();
+        int cursor = offset;
+        int nextOffset = -1;
+        int totalLength = 0;
         while (true)
         {
-            EnsureAvailable(buffer, offset, 1);
-            byte length = buffer[offset++];
+            EnsureAvailable(buffer, cursor, 1);
+            byte length = buffer[cursor];
             if (length == 0)
-                return;
+            {
+                offset = nextOffset >= 0 ? nextOffset : cursor + 1;
+                return string.Join('.', labels);
+            }
             if ((length & 0xC0) == 0xC0)
             {
-                EnsureAvailable(buffer, offset, 1);
-                offset++;
-                return;
+                EnsureAvailable(buffer, cursor, 2);
+                int target = ((length & 0x3F) << 8) | buffer[cursor + 1];
+                if (target < 12 || target >= cursor)
+                    throw new InvalidDataException("DNS response contains an invalid name pointer.");
+                if (nextOffset < 0)
+                    nextOffset = cursor + 2;
+                cursor = target;
+                continue;
             }
-            if ((length & 0xC0) != 0 || ++labels > 127)
+            if ((length & 0xC0) != 0 || length > 63 || labels.Count >= 127)
                 throw new InvalidDataException("DNS response contains an invalid name.");
-            EnsureAvailable(buffer, offset, length);
-            offset += length;
+            EnsureAvailable(buffer, cursor + 1, length);
+            labels.Add(System.Text.Encoding.ASCII.GetString(buffer, cursor + 1, length));
+            totalLength += length + 1;
+            if (totalLength > 255)
+                throw new InvalidDataException("DNS response contains an overlong name.");
+            cursor += 1 + length;
         }
     }
 

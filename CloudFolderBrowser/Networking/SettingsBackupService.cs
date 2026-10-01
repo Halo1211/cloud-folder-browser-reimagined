@@ -101,7 +101,7 @@ public static class SettingsBackupService
                 LoggedInYandex = value.loginedYandex,
                 LoggedInMega = value.loginedMega,
                 YandexAccessToken = value.accessTokenYandex ?? string.Empty,
-                SavedPasswordsJson = value.savedPasswordsJson ?? string.Empty,
+                SavedPasswordsJson = ShareCredentialCacheCodec.ToPortableJson(value.savedPasswordsJson),
                 MegaLoginToken = value.loginTokenMega ?? string.Empty,
                 MegaLogin = value.megaLogin ?? string.Empty,
                 MegaPassword = value.megaPassword ?? string.Empty,
@@ -163,17 +163,31 @@ public static class SettingsBackupService
     public static void Apply(SettingsBackupDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        if (document.SchemaVersion != 1)
-            throw new InvalidDataException($"Unsupported backup schema version {document.SchemaVersion}.");
-        SettingsBackupSnapshot source = document.Settings
-            ?? throw new InvalidDataException("The backup does not contain settings.");
+        ValidateDocument(document);
+        var rules = (document.ProviderProxyRules ?? new List<PortableProxyRule>())
+            .Where(sourceRule => sourceRule != null)
+            .Select(sourceRule =>
+            {
+                var rule = new ProviderProxyRule
+                {
+                    RouteKey = sourceRule.RouteKey,
+                    Mode = sourceRule.Mode,
+                    ProxyUrl = sourceRule.ProxyUrl,
+                    Username = sourceRule.Username,
+                    BypassLocal = sourceRule.BypassLocal
+                };
+                rule.Password = sourceRule.Password;
+                return rule;
+            }).ToArray();
+        SettingsBackupSnapshot source = document.Settings;
+        string protectedShareCredentials = ShareCredentialCacheCodec.Serialize(ShareCredentialCacheCodec.Deserialize(source.SavedPasswordsJson));
         var value = Properties.Settings.Default;
         value.lastSyncFolderPath = source.LastSyncFolderPath ?? string.Empty;
         value.publicFoldersJson = source.PublicFoldersJson ?? string.Empty;
         value.loginedYandex = source.LoggedInYandex;
         value.loginedMega = source.LoggedInMega;
         value.accessTokenYandex = source.YandexAccessToken ?? string.Empty;
-        value.savedPasswordsJson = source.SavedPasswordsJson ?? string.Empty;
+        value.savedPasswordsJson = protectedShareCredentials;
         value.loginTokenMega = source.MegaLoginToken ?? string.Empty;
         value.megaLogin = source.MegaLogin ?? string.Empty;
         value.megaPassword = source.MegaPassword ?? string.Empty;
@@ -219,25 +233,12 @@ public static class SettingsBackupService
         value.connectTimeoutSeconds = Math.Clamp(source.ConnectTimeoutSeconds, 5, 120);
         value.bandwidthLimitKibPerSecond = Math.Clamp(source.BandwidthLimitKibPerSecond, 0, 1_000_000);
 
-        var rules = (document.ProviderProxyRules ?? new List<PortableProxyRule>()).Select(sourceRule =>
-        {
-            var rule = new ProviderProxyRule
-            {
-                RouteKey = sourceRule.RouteKey,
-                Mode = sourceRule.Mode,
-                ProxyUrl = sourceRule.ProxyUrl,
-                Username = sourceRule.Username,
-                BypassLocal = sourceRule.BypassLocal
-            };
-            rule.Password = sourceRule.Password;
-            return rule;
-        }).ToArray();
         ProviderProxyRuleStore.Save(rules);
         value.Save();
 
         foreach (CloudAccountProfile account in document.Accounts ?? new List<CloudAccountProfile>())
         {
-            if (account.Id == Guid.Empty
+            if (account == null || account.Id == Guid.Empty
                 || !Enum.IsDefined(typeof(CloudAccountProvider), account.Provider)
                 || string.IsNullOrWhiteSpace(account.DisplayName))
                 continue;
@@ -301,8 +302,10 @@ public static class SettingsBackupService
         {
             using var aes = new AesGcm(key, TagSize);
             aes.Decrypt(nonce, data[offset..], tag, clear, associatedData);
-            return JsonConvert.DeserializeObject<SettingsBackupDocument>(Encoding.UTF8.GetString(clear))
+            var document = JsonConvert.DeserializeObject<SettingsBackupDocument>(Encoding.UTF8.GetString(clear))
                 ?? throw new InvalidDataException("The backup payload is empty.");
+            ValidateDocument(document);
+            return document;
         }
         catch (CryptographicException ex)
         {
@@ -316,6 +319,48 @@ public static class SettingsBackupService
         {
             CryptographicOperations.ZeroMemory(clear);
             CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
+    private static void ValidateDocument(SettingsBackupDocument document)
+    {
+        if (document.SchemaVersion != 1)
+            throw new InvalidDataException($"Unsupported backup schema version {document.SchemaVersion}.");
+        if (document.Settings == null)
+            throw new InvalidDataException("The backup does not contain settings.");
+        if (!double.IsFinite(document.Settings.CheckFileSizeError))
+            throw new InvalidDataException("The backup contains an invalid file-size tolerance.");
+        SettingsBackupSnapshot settings = document.Settings;
+        try { _ = ShareCredentialCacheCodec.Deserialize(settings.SavedPasswordsJson); }
+        catch (Exception ex) when (ex is JsonException or CryptographicException or FormatException)
+        {
+            throw new InvalidDataException("The backup contains an invalid share-credential cache.", ex);
+        }
+        new NetworkConfiguration
+        {
+            DnsProvider = Enum.IsDefined(typeof(DnsProviderMode), settings.DnsProvider)
+                ? (DnsProviderMode)settings.DnsProvider : DnsProviderMode.System,
+            DnsTransport = Enum.IsDefined(typeof(DnsTransport), settings.DnsTransport)
+                ? (DnsTransport)settings.DnsTransport : DnsTransport.Udp,
+            CustomDnsServer = settings.CustomDnsServer ?? string.Empty,
+            ProxyMode = Enum.IsDefined(typeof(ProxyMode), settings.ProxyMode)
+                ? (ProxyMode)settings.ProxyMode : ProxyMode.System,
+            ProxyUrl = settings.ProxyUrl ?? string.Empty,
+            ProxyUsername = settings.ProxyUsername ?? string.Empty,
+            ConnectTimeout = TimeSpan.FromSeconds(Math.Clamp(settings.ConnectTimeoutSeconds, 5, 120))
+        }.Validate();
+        foreach (PortableProxyRule source in document.ProviderProxyRules ?? new List<PortableProxyRule>())
+        {
+            if (source == null)
+                continue;
+            ProviderProxyRuleStore.Validate(new ProviderProxyRule
+            {
+                RouteKey = source.RouteKey,
+                Mode = source.Mode,
+                ProxyUrl = source.ProxyUrl,
+                Username = source.Username,
+                BypassLocal = source.BypassLocal
+            });
         }
     }
 

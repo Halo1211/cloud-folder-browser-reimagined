@@ -1,290 +1,135 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Xml;
+using System.Xml.Linq;
 using WebDAVClient.Model;
 
 namespace WebDAVClient.Helpers
 {
-    /// <summary>
-    /// Represents the parser for response's results.
-    /// </summary>
     internal static class ResponseParser
     {
-        /// <summary>
-        /// Parses the disk item.
-        /// </summary>
-        /// <param name="stream">The response text.</param>
-        /// <returns>The  parsed item.</returns>
-        public static Item ParseItem(Stream stream)
-        {
-            return ParseItems(stream).FirstOrDefault();
-        }
-
-        internal static XmlReaderSettings XmlReaderSettings = new XmlReaderSettings
+        internal static readonly XmlReaderSettings XmlReaderSettings = new XmlReaderSettings
         {
             IgnoreComments = true,
             IgnoreProcessingInstructions = true,
-            IgnoreWhitespace = true
+            IgnoreWhitespace = true,
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null
         };
 
-        /// <summary>
-        /// Parses the disk items.
-        /// </summary>
-        /// <param name="stream">The response text.</param>
-        /// <returns>The list of parsed items.</returns>
+        public static Item ParseItem(Stream stream) => ParseItems(stream).FirstOrDefault();
+
         public static IEnumerable<Item> ParseItems(Stream stream)
         {
-            var items = new List<Item>();
-            using (var reader = XmlReader.Create(stream, XmlReaderSettings))
-            {
-                
-                Item itemInfo = null;
-                while (reader.Read())
-                {
-                    if (reader.NodeType == XmlNodeType.Element)
-                    {
-                        switch (reader.LocalName.ToLower())
-                        {
-                            case "response":
-                                itemInfo = new Item();
-                                break;
-                            case "href":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    var value = reader.Value;
-                                    value = value.Replace("#", "%23");
-                                    itemInfo.Href = value;
-                                }
-                                break;
-                            case "creationdate":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    DateTime creationdate;
-                                    if (DateTime.TryParse(reader.Value, out creationdate))
-                                        itemInfo.CreationDate = creationdate;
-                                }
-                                break;
-                            case "getlastmodified":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    DateTime lastmodified;
-                                    if (DateTime.TryParse(reader.Value, out lastmodified))
-                                        itemInfo.LastModified = lastmodified;
-                                }
-                                break;
-                            case "displayname":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.DisplayName = reader.Value;
-                                }
-                                break;
-                            case "getcontentlength":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    long contentLength;
-                                    if (long.TryParse(reader.Value, out contentLength))
-                                        itemInfo.ContentLength = contentLength;
-                                }
-                                break;
-                            case "getcontenttype":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.ContentType = reader.Value;
-                                }
-                                break;
-                            case "getetag":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.Etag = reader.Value;
-                                }
-                                break;
-                            case "iscollection":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    bool isCollection;
-                                    if (bool.TryParse(reader.Value, out isCollection))
-                                        itemInfo.IsCollection = isCollection;
-                                    int isCollectionInt;
-                                    if (int.TryParse(reader.Value, out isCollectionInt))
-                                        itemInfo.IsCollection = isCollectionInt == 1;
-                                }
-                                break;
-                            case "resourcetype":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    var resourceType = reader.LocalName.ToLower();
-                                    if (string.Equals(resourceType, "collection", StringComparison.InvariantCultureIgnoreCase))
-                                        itemInfo.IsCollection = true;
-                                }
-                                break;
-                            case "hidden":
-                            case "ishidden":
-                                itemInfo.IsHidden = true;
-                                break;
-                            case "checked-in":
-                            case "version-controlled-configuration":
-                                reader.Skip();
-                                break;
-                        }
-                    }
-                    else if (reader.NodeType == XmlNodeType.EndElement && reader.LocalName.ToLower() == "response")
-                    {
-                        // Remove trailing / if the item is not a collection
-                        var href = itemInfo.Href.TrimEnd('/');
-                        if (!itemInfo.IsCollection)
-                        {
-                            itemInfo.Href = href;
-                        }
-                        if (string.IsNullOrEmpty(itemInfo.DisplayName) )
-                        {
-                            var name = href.Substring(href.LastIndexOf('/') + 1);
-                            itemInfo.DisplayName = WebUtility.UrlDecode(name);
-                        }
-                        items.Add(itemInfo);
-                    }
-                }
-            }
-
-            return items;
+            using var reader = XmlReader.Create(stream, XmlReaderSettings);
+            return ParseItems(reader);
         }
 
         public static IEnumerable<Item> ParseItems(string text)
         {
-            var items = new List<Item>();
-            using var tr = new StringReader(text);
-            using (var reader = XmlReader.Create(tr, XmlReaderSettings))
-            {
-                Item itemInfo = null;
-                while (reader.Read())
-                {
-                    if (reader.NodeType == XmlNodeType.Element)
-                    {
-                        switch (reader.LocalName.ToLower())
-                        {
-                            case "response":
-                                itemInfo = new Item();
-                                break;
-                            case "href":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    var value = reader.Value;
-                                    value = value.Replace("#", "%23");
-                                    itemInfo.Href = value;
-                                }
-                                break;
-                            case "creationdate":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    DateTime creationdate;
-                                    if (DateTime.TryParse(reader.Value, out creationdate))
-                                        itemInfo.CreationDate = creationdate;
-                                }
-                                break;
-                            case "getlastmodified":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    DateTime lastmodified;
-                                    if (DateTime.TryParse(reader.Value, out lastmodified))
-                                        itemInfo.LastModified = lastmodified;
-                                }
-                                break;
-                            case "displayname":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.DisplayName = reader.Value;
-                                }
-                                break;
-                            case "getcontentlength":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    long contentLength;
-                                    if (long.TryParse(reader.Value, out contentLength))
-                                        itemInfo.ContentLength = contentLength;
-                                }
-                                break;
-                            case "getcontenttype":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.ContentType = reader.Value;
-                                }
-                                break;
-                            case "getetag":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    itemInfo.Etag = reader.Value;
-                                }
-                                break;
-                            case "iscollection":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    bool isCollection;
-                                    if (bool.TryParse(reader.Value, out isCollection))
-                                        itemInfo.IsCollection = isCollection;
-                                    int isCollectionInt;
-                                    if (int.TryParse(reader.Value, out isCollectionInt))
-                                        itemInfo.IsCollection = isCollectionInt == 1;
-                                }
-                                break;
-                            case "resourcetype":
-                                if (!reader.IsEmptyElement)
-                                {
-                                    reader.Read();
-                                    var resourceType = reader.LocalName.ToLower();
-                                    if (string.Equals(resourceType, "collection", StringComparison.InvariantCultureIgnoreCase))
-                                        itemInfo.IsCollection = true;
-                                }
-                                break;
-                            case "hidden":
-                            case "ishidden":
-                                itemInfo.IsHidden = true;
-                                break;
-                            case "checked-in":
-                            case "version-controlled-configuration":
-                                reader.Skip();
-                                break;
-                        }
-                    }
-                    else if (reader.NodeType == XmlNodeType.EndElement && reader.LocalName.ToLower() == "response")
-                    {
-                        // Remove trailing / if the item is not a collection
-                        var href = itemInfo.Href.TrimEnd('/');
-                        if (!itemInfo.IsCollection)
-                        {
-                            itemInfo.Href = href;
-                        }
-                        if (string.IsNullOrEmpty(itemInfo.DisplayName))
-                        {
-                            var name = href.Substring(href.LastIndexOf('/') + 1);
-                            itemInfo.DisplayName = WebUtility.UrlDecode(name);
-                        }
-                        items.Add(itemInfo);
-                    }
-                }
-            }
+            using var input = new StringReader(text);
+            using var reader = XmlReader.Create(input, XmlReaderSettings);
+            return ParseItems(reader);
+        }
 
+        private static IEnumerable<Item> ParseItems(XmlReader reader)
+        {
+            XDocument document = XDocument.Load(reader);
+            var items = new List<Item>();
+            foreach (XElement response in document.Descendants().Where(element => IsNamed(element, "response")))
+            {
+                string href = Child(response, "href")?.Value;
+                if (string.IsNullOrWhiteSpace(href) || !IsSuccessful(Child(response, "status")?.Value))
+                    continue;
+
+                var item = new Item { Href = href.Trim().Replace("#", "%23") };
+                // A multistatus response can contain both successful and failed
+                // property groups. Missing/failed properties must not replace
+                // values from a successful group.
+                foreach (XElement propstat in response.Elements().Where(element => IsNamed(element, "propstat")))
+                {
+                    if (!IsSuccessful(Child(propstat, "status")?.Value))
+                        continue;
+                    XElement properties = Child(propstat, "prop");
+                    if (properties == null)
+                        continue;
+                    foreach (XElement property in properties.Elements())
+                        ReadProperty(item, property);
+                }
+
+                string namePath = item.Href.TrimEnd('/');
+                if (!item.IsCollection)
+                    item.Href = namePath;
+                if (string.IsNullOrEmpty(item.DisplayName))
+                    item.DisplayName = Uri.UnescapeDataString(namePath.Substring(namePath.LastIndexOf('/') + 1));
+                items.Add(item);
+            }
             return items;
         }
 
+        private static void ReadProperty(Item item, XElement property)
+        {
+            string value = property.Value;
+            switch (property.Name.LocalName.ToLowerInvariant())
+            {
+                case "creationdate":
+                    if (TryDate(value, out DateTime created))
+                        item.CreationDate = created;
+                    break;
+                case "getlastmodified":
+                    if (TryDate(value, out DateTime modified))
+                        item.LastModified = modified;
+                    break;
+                case "displayname":
+                    if (!string.IsNullOrEmpty(value))
+                        item.DisplayName = value;
+                    break;
+                case "getcontentlength":
+                    if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long length) && length >= 0)
+                        item.ContentLength = length;
+                    break;
+                case "getcontenttype":
+                    item.ContentType = value;
+                    break;
+                case "getetag":
+                    item.Etag = value;
+                    break;
+                case "iscollection":
+                    item.IsCollection = ReadBoolean(value);
+                    break;
+                case "resourcetype":
+                    item.IsCollection = property.Elements().Any(element => IsNamed(element, "collection"));
+                    break;
+                case "hidden":
+                case "ishidden":
+                    item.IsHidden = property.IsEmpty || ReadBoolean(value);
+                    break;
+            }
+        }
 
+        private static bool ReadBoolean(string value) => value.Trim() == "1"
+            || bool.TryParse(value, out bool result) && result;
+
+        private static bool TryDate(string value, out DateTime date) => DateTime.TryParse(
+            value, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out date);
+
+        private static bool IsSuccessful(string status)
+        {
+            // Some compatible servers omit propstat/status entirely.
+            if (string.IsNullOrWhiteSpace(status))
+                return true;
+            string[] parts = status.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length >= 2 && int.TryParse(parts[1], out int code) && code is >= 200 and < 300;
+        }
+
+        private static XElement Child(XElement parent, string name) =>
+            parent.Elements().FirstOrDefault(element => IsNamed(element, name));
+
+        private static bool IsNamed(XElement element, string name) =>
+            element.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase);
     }
 }

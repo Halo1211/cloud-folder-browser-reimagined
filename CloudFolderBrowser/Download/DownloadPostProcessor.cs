@@ -22,15 +22,19 @@ internal sealed class DownloadPostProcessor
             return PostProcessingResult.None;
 
         string extension = Path.GetExtension(downloadedPath);
+        bool repaired = false;
         if (Properties.Settings.Default.par2RepairEnabled)
         {
             string? par2 = FindPar2(downloadedPath);
             if (par2 != null)
+            {
                 await RunPar2Async(par2, cancellationToken).ConfigureAwait(false);
+                repaired = true;
+            }
         }
 
         if (!ArchiveExtensions.Contains(extension))
-            return extension.Equals(".par2", StringComparison.OrdinalIgnoreCase)
+            return repaired
                 ? new PostProcessingResult(true, "PAR2 recovery completed")
                 : PostProcessingResult.None;
 
@@ -73,9 +77,22 @@ internal sealed class DownloadPostProcessor
             return downloadedPath;
         string directory = Path.GetDirectoryName(downloadedPath)!;
         string baseName = Path.GetFileNameWithoutExtension(downloadedPath);
+        string fileName = Path.GetFileName(downloadedPath);
         return Directory.EnumerateFiles(directory, "*.par2", SearchOption.TopDirectoryOnly)
-            .FirstOrDefault(path => Path.GetFileNameWithoutExtension(path)
-                .StartsWith(baseName, StringComparison.OrdinalIgnoreCase));
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(path => MatchesPar2Name(Path.GetFileNameWithoutExtension(path), baseName)
+                || MatchesPar2Name(Path.GetFileNameWithoutExtension(path), fileName));
+    }
+
+    private static bool MatchesPar2Name(string candidate, string name)
+    {
+        if (candidate.Equals(name, StringComparison.OrdinalIgnoreCase))
+            return true;
+        string prefix = name + ".vol";
+        if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        string[] range = candidate[prefix.Length..].Split('+');
+        return range.Length == 2 && range.All(value => value.Length > 0 && value.All(character => character is >= '0' and <= '9'));
     }
 
     private static async Task ExtractZipSafelyAsync(
@@ -90,18 +107,41 @@ internal sealed class DownloadPostProcessor
             foreach (ZipArchiveEntry entry in archive.Entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                foreach (string component in entry.FullName.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (component is not "." and not ".." && component != Utility.GetSafePathName(component))
+                        throw new InvalidDataException("Archive entry contains an unsafe Windows path component.");
+                }
                 string target = Path.GetFullPath(Path.Combine(destination, entry.FullName));
                 if (!target.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Archive entry would escape the extraction directory.");
+                RejectExtractionReparsePoints(destinationRoot, target);
                 if (string.IsNullOrEmpty(entry.Name))
                 {
                     Directory.CreateDirectory(target);
                     continue;
                 }
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                RejectExtractionReparsePoints(destinationRoot, target);
                 entry.ExtractToFile(target, overwrite: true);
             }
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void RejectExtractionReparsePoints(string destinationRoot, string target)
+    {
+        string root = destinationRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        for (string? current = target; current != null; current = Path.GetDirectoryName(current))
+        {
+            try
+            {
+                if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+                    throw new InvalidDataException("Archive extraction cannot traverse a junction or symbolic link.");
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
+            if (string.Equals(current.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), root, StringComparison.OrdinalIgnoreCase))
+                break;
+        }
     }
 
     private static async Task RunSevenZipAsync(
@@ -153,40 +193,48 @@ internal sealed class DownloadPostProcessor
             throw new FileNotFoundException($"{displayName} executable is not configured or was not found.", path);
     }
 
-    private static async Task RunProcessAsync(
+    internal static async Task RunProcessAsync(
         ProcessStartInfo start,
         string operation,
         CancellationToken cancellationToken,
         string standardInput = "")
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using Process process = Process.Start(start)
             ?? throw new InvalidOperationException($"Unable to start {operation}.");
         Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         Task<string> stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        if (start.RedirectStandardInput)
-        {
-            await process.StandardInput.WriteLineAsync(standardInput.AsMemory(), cancellationToken)
-                .ConfigureAwait(false);
-            process.StandardInput.Close();
-        }
         try
         {
+            if (start.RedirectStandardInput)
+            {
+                await process.StandardInput.WriteLineAsync(standardInput.AsMemory(), cancellationToken)
+                    .ConfigureAwait(false);
+                process.StandardInput.Close();
+            }
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            string output = await stdout.ConfigureAwait(false);
+            string error = await stderr.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                string detail = string.IsNullOrWhiteSpace(error) ? output : error;
+                if (detail.Length > 500)
+                    detail = detail[..500] + "…";
+                throw new InvalidDataException($"{operation} failed with exit code {process.ExitCode}: {detail}");
+            }
         }
-        catch (OperationCanceledException)
+        catch
         {
             if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) when (process.HasExited) { }
+            }
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            try { await Task.WhenAll(stdout, stderr).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException)
+            { /* Preserve the original process/input failure. */ }
             throw;
-        }
-        string output = await stdout.ConfigureAwait(false);
-        string error = await stderr.ConfigureAwait(false);
-        if (process.ExitCode != 0)
-        {
-            string detail = string.IsNullOrWhiteSpace(error) ? output : error;
-            if (detail.Length > 500)
-                detail = detail[..500] + "…";
-            throw new InvalidDataException($"{operation} failed with exit code {process.ExitCode}: {detail}");
         }
     }
 }

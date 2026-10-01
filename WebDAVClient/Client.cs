@@ -237,7 +237,13 @@ namespace WebDAVClient
 
         public async Task<IEnumerable<Item>> ListShared(string path = "/", int? depth = 1)
         {
-             Uri listUri = new Uri($"{Server}{BasePath}");          
+            var builder = new UriBuilder($"{Server}{BasePath}");
+            string requestedPath = string.Join("/", (path ?? "/").Replace('\\', '/')
+                .Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
+            builder.Path = builder.Path.TrimEnd('/') + "/" + requestedPath;
+            if (!builder.Path.EndsWith('/'))
+                builder.Path += "/";
+            Uri listUri = builder.Uri;
            
             // Depth header: http://webdav.org/specs/rfc4918.html#rfc.section.9.1.4
             IDictionary<string, string> headers = new Dictionary<string, string>();
@@ -253,7 +259,7 @@ namespace WebDAVClient
                 }
             }
            
-            string svcCredentials = Convert.ToBase64String(Encoding.ASCII.GetBytes(Credentials.UserName + ":" + Credentials.Password));
+            string svcCredentials = Convert.ToBase64String(Encoding.UTF8.GetBytes(Credentials.UserName + ":" + Credentials.Password));
 
             headers.Add("Authorization", "Basic " + svcCredentials); //add auth just in case
 
@@ -294,7 +300,9 @@ namespace WebDAVClient
                         else
                         {
                             // If it's not the requested parent folder, add it to the result                            
-                            if (!string.Equals(item.Href.ToString(), "/public.php/webdav/", StringComparison.CurrentCultureIgnoreCase))
+                            if (!Uri.TryCreate(listUri, item.Href, out Uri itemUri)
+                                || !string.Equals(Uri.UnescapeDataString(itemUri.AbsolutePath).TrimEnd('/'),
+                                    Uri.UnescapeDataString(listUri.AbsolutePath).TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
                             {
                                 result.Add(item);
                             }

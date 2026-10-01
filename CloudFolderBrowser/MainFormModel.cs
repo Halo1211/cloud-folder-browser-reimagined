@@ -32,6 +32,27 @@ namespace CloudFolderBrowser
 
         public bool ValidateFileSize = false;       
 
+        internal async Task LoadSavedFolderCacheAsync(string fileName)
+        {
+            CloudFolder loadedFolder = await Task.Run(() =>
+            {
+                string jsonString = File.ReadAllText(fileName);
+                return SavedFolderCache.Deserialize(jsonString)
+                    ?? throw new JsonException("The saved folder list is empty.");
+            });
+            var loadedFolders = new List<CloudFolder>();
+            void Add(CloudFolder folder)
+            {
+                loadedFolders.Add(folder);
+                foreach (CloudFolder child in folder.Subfolders)
+                    Add(child);
+            }
+            Add(loadedFolder);
+            CloudPublicFolder = loadedFolder;
+            AllFolders = loadedFolders;
+            LoadedFromFile = true;
+        }
+
         public async Task<List<SyncPlanItem>> BuildSyncPlanAsync(
             List<CloudFolder> checkedFolders,
             List<CloudFolder> mixedFolders,
@@ -41,10 +62,11 @@ namespace CloudFolderBrowser
             CancellationToken cancellationToken = default,
             IProgress<SyncPlanProgress>? progress = null)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var selectedFiles = checkedFolders
                 .SelectMany(folder => folder.GetFlatFilesList())
                 .Concat(mixedFolders.SelectMany(folder => folder.Files))
-                .GroupBy(file => NormalizeCloudPath(file.Path), StringComparer.OrdinalIgnoreCase)
+                .GroupBy(file => NormalizeCloudPath(file.Path), StringComparer.Ordinal)
                 .Select(group => group.First())
                 .ToList();
 
@@ -142,9 +164,9 @@ namespace CloudFolderBrowser
 
         private static string NormalizeCloudPath(string? path)
         {
-            return Uri.UnescapeDataString(path ?? string.Empty)
-                .Replace('\\', '/')
-                .Trim();
+            // Keep remote identity intact until the preview validates local targets.
+            // URI decoding or trimming here can hide a distinct remote file.
+            return (path ?? string.Empty).Replace('\\', '/');
         }
 
         public async Task<List<CloudFile>> GetMissingFiles(List<CloudFolder> checkedFolders, List<CloudFolder> mixedFolders, string syncFolderPath, bool ignoreExistingFiles, bool validateFileSize)
@@ -232,54 +254,65 @@ namespace CloudFolderBrowser
         {
             if (nodes == null || nodes.Count == 0)
                 throw new InvalidDataException("The FogLink response did not contain any files.");
+            if (nodes.Count == 1 && nodes[0].IsFile)
+            {
+                await LoadMega(nodes, originalString);
+                return;
+            }
 
-            int filecount = 0;
-            
-                await Task.Run(() =>
+            await Task.Run(() =>
+            {
+                var byId = new Dictionary<string, FogLinkFile>(StringComparer.Ordinal);
+                foreach (FogLinkFile node in nodes)
                 {
-                    CloudPublicFolder = new CloudFolder(nodes[0].Name, nodes[0].CreationDate, DateTime.MinValue, 0);
-                    CloudPublicFolder.Path = "/";
-                    CloudPublicFolder.EncryptedUrl = nodes[0].EncryptedLink;
-                    CloudPublicFolder.OriginalString = originalString;
+                    if (node == null || string.IsNullOrWhiteSpace(node.Id) || !byId.TryAdd(node.Id, node))
+                        throw new InvalidDataException("FogLink returned a missing or duplicate node ID.");
+                }
+                FogLinkFile[] roots = nodes.Where(node => !node.IsFile
+                    && (string.IsNullOrEmpty(node.ParentId) || !byId.ContainsKey(node.ParentId))).ToArray();
+                if (roots.Length != 1)
+                    throw new InvalidDataException("FogLink must return one root folder.");
 
-                    Dictionary<string, CloudFolder> megaFolders = new Dictionary<string, CloudFolder>();
-                    megaFolders.Add(nodes[0].Id, CloudPublicFolder);
-
-                    AllFolders = new List<CloudFolder>() { CloudPublicFolder };
-
-                    foreach (var node in nodes)
+                FogLinkFile rootNode = roots[0];
+                var root = new CloudFolder(rootNode.Name, rootNode.CreationDate, rootNode.ModificationDate, 0)
+                {
+                    Path = "/", EncryptedUrl = rootNode.EncryptedLink, OriginalString = originalString
+                };
+                var folders = new List<CloudFolder> { root };
+                var children = nodes.Where(node => !string.IsNullOrEmpty(node.ParentId))
+                    .ToLookup(node => node.ParentId, StringComparer.Ordinal);
+                var visited = new HashSet<string>(StringComparer.Ordinal) { rootNode.Id };
+                void AddChildren(FogLinkFile parentNode, CloudFolder parentFolder)
+                {
+                    foreach (FogLinkFile node in children[parentNode.Id])
                     {
-                        if (node.Type == NodeType.Directory)
+                        if (!visited.Add(node.Id))
+                            throw new InvalidDataException("FogLink returned a cyclic folder tree.");
+                        if (node.IsFile)
                         {
-                            CloudFolder subfolder = new CloudFolder(node.Name, node.CreationDate, DateTime.MinValue, node.Size2);
-                            if (node.ParentId == null || !megaFolders.ContainsKey(node.ParentId))
-                                continue;
-                            CloudFolder parentFolder = megaFolders[node.ParentId];
-                            subfolder.Path = parentFolder.Path + subfolder.Name + "/";
-                            subfolder.EncryptedUrl = node.EncryptedLink;
-                            megaFolders.Add(node.Id, subfolder);
-                            parentFolder.AddSubfolder(subfolder);
-                            AllFolders.Add(subfolder);
-                            continue;
-                        }
-                        if (node.Type == NodeType.File)
-                        {
-                            CloudFile file = new CloudFile(node.Name, node.CreationDate, node.CreationDate, node.Size2);
-                            if (node.ParentId == null || !megaFolders.TryGetValue(node.ParentId, out CloudFolder? parentFolder))
-                                continue;
-                            file.Path = parentFolder.Path + file.Name;
-                            file.EncryptedUrl = node.EncryptedLink;
+                            CloudFile file = CreateFogLinkFile(node, parentFolder.Path);
                             parentFolder.SizeTopDirectoryOnly += file.Size;
                             parentFolder.AddFile(file);
-                            filecount++;
-                            //parentFolder.Files.Add(file);
+                        }
+                        else
+                        {
+                            var folder = new CloudFolder(node.Name, node.CreationDate, node.ModificationDate, 0)
+                            {
+                                Path = parentFolder.Path + node.Name + "/", EncryptedUrl = node.EncryptedLink
+                            };
+                            parentFolder.AddSubfolder(folder);
+                            folders.Add(folder);
+                            AddChildren(node, folder);
                         }
                     }
-
-                });
-            CloudPublicFolder.CalculateFolderSize();
-             
-          
+                }
+                AddChildren(rootNode, root);
+                if (visited.Count != nodes.Count)
+                    throw new InvalidDataException("FogLink returned nodes outside the root folder tree.");
+                root.CalculateFolderSize();
+                CloudPublicFolder = root;
+                AllFolders = folders;
+            });
         }
 
         public async Task LoadMega(List<FogLinkFile> nodes, string originalString) //foglink
@@ -289,7 +322,7 @@ namespace CloudFolderBrowser
 
             await Task.Run(() =>
             {             
-                CloudPublicFolder = new CloudFolder("MEGA", nodes[0].ModificationDate, nodes[0].ModificationDate, 0);
+                CloudPublicFolder = new CloudFolder("MEGA", nodes[0].CreationDate, nodes[0].ModificationDate, 0);
                 CloudPublicFolder.Path = "/";
                 if (!nodes[0].IsFile)
                     CloudPublicFolder.EncryptedUrl = nodes[0].EncryptedLink;
@@ -303,9 +336,7 @@ namespace CloudFolderBrowser
                 {
                     var parentFolder = CloudPublicFolder;
                     var node = nodes[0];
-                    CloudFile file = new CloudFile(node.Name, node.ModificationDate, node.ModificationDate, node.Size2);
-                    file.Path = parentFolder.Path + file.Name;
-                    file.EncryptedUrl = node.EncryptedLink;
+                    CloudFile file = CreateFogLinkFile(node, parentFolder.Path);
                     parentFolder.SizeTopDirectoryOnly += file.Size;
                     parentFolder.AddFile(file);
                 }
@@ -319,8 +350,8 @@ namespace CloudFolderBrowser
             {
                 if (node.Type == NodeType.Directory)
                 {
-                    CloudFolder subfolder = new CloudFolder(node.Name, node.CreationDate, DateTime.MinValue, node.Size2);  
-                    subfolder.Path = parentFolder.Path + subfolder.Name + "/";
+                    CloudFolder subfolder = new CloudFolder(node.Name, node.CreationDate, node.ModificationDate, 0);
+                    subfolder.Path = parentFolder.Path + node.Name + "/";
                     subfolder.EncryptedUrl = node.EncryptedLink;                 
                     parentFolder.AddSubfolder(subfolder);
                     AllFolders.Add(subfolder);
@@ -329,19 +360,31 @@ namespace CloudFolderBrowser
                 }
                 if (node.Type == NodeType.File)
                 {
-                    CloudFile file = new CloudFile(node.Name, node.CreationDate, node.CreationDate, node.Size2);                    
-                    file.Path = parentFolder.Path + file.Name;
-                    file.EncryptedUrl = node.EncryptedLink;
+                    CloudFile file = CreateFogLinkFile(node, parentFolder.Path);
                     parentFolder.SizeTopDirectoryOnly += file.Size;
                     parentFolder.AddFile(file);                                  
                 }
             }
         }
 
+        private static CloudFile CreateFogLinkFile(FogLinkFile node, string parentPath) => new(
+            node.Name, node.CreationDate, node.ModificationDate, node.Size2)
+        {
+            Path = parentPath + node.Name,
+            EncryptedUrl = node.EncryptedLink,
+            HasKnownSize = node.Size.HasValue
+        };
+
         public Client webdavClient;
         string allsyncUrl = "https://allsync.com";
         public string allsyncRootFolderAddress = "";
         public Dictionary<string, string> savedPasswords = new Dictionary<string, string>();
+        internal string GetSavedSharePassword(Uri source, string shareKey) =>
+            savedPasswords.TryGetValue(ShareCredentialCacheCodec.GetScopeKey(source, shareKey), out string? value)
+                ? value ?? string.Empty : string.Empty;
+
+        internal void RememberSharePassword(Uri source, string shareKey, string value) =>
+            savedPasswords[ShareCredentialCacheCodec.GetScopeKey(source, shareKey)] = value;
         public string folderKey = "", password = "";
         public CloudflareSession? FlareSolverrSession { get; private set; }
 
@@ -377,7 +420,7 @@ namespace CloudFolderBrowser
             allsyncRootFolderAddress = $"{allsyncUrl}/s/{Uri.EscapeDataString(folderKey)}?path=";
 
             var requestedPath = HttpUtility.ParseQueryString(shareUri.Query)["path"];
-            requestedPath = HttpUtility.UrlDecode(requestedPath ?? "/")
+            requestedPath = (requestedPath ?? "/")
                 .Replace('\\', '/');
             if (string.IsNullOrWhiteSpace(requestedPath))
                 requestedPath = "/";
@@ -392,9 +435,9 @@ namespace CloudFolderBrowser
                 : requestedPath.TrimEnd('/').Split('/').Last();
 
             WriteToLog($"\n{DateTime.Now}\n Searching for password for {folderKey} \n\n");
-            if (savedPasswords.ContainsKey(folderKey))
+            password = GetSavedSharePassword(shareUri, folderKey);
+            if (!string.IsNullOrEmpty(password))
             {
-                password = savedPasswords[folderKey];
                 WriteToLog($"\n{DateTime.Now}\n Found a saved password for {folderKey}\n\n");
 
             }
@@ -471,11 +514,8 @@ namespace CloudFolderBrowser
             }
 
             password = webdavClient.Credentials.Password;
-            if (savedPasswords.ContainsKey(folderKey))
-                savedPasswords[folderKey] = password;
-            else
-                savedPasswords.Add(folderKey, password);
-            Properties.Settings.Default.savedPasswordsJson = JsonConvert.SerializeObject(savedPasswords);
+            RememberSharePassword(new Uri(allsyncUrl), folderKey, password);
+            Properties.Settings.Default.savedPasswordsJson = ShareCredentialCacheCodec.Serialize(savedPasswords);
             Properties.Settings.Default.Save();
 
             WebdavCredential = new NetworkCredential { UserName = folderKey, Password = password };
@@ -487,7 +527,7 @@ namespace CloudFolderBrowser
             {
                 if (item.IsCollection)
                 {
-                    string path = HttpUtility.UrlDecode(item.Href).Replace("/public.php/webdav", "");                    
+                    string path = Uri.UnescapeDataString(item.Href).Replace("/public.php/webdav", "");
                     if (!allFolders.ConvertAll(x => x.Path).Contains(path))
                     {
                         CloudFolder newFolder = new CloudFolder(item.DisplayName, DateTime.MinValue, item.LastModified ?? DateTime.MinValue, 0);
@@ -522,7 +562,7 @@ namespace CloudFolderBrowser
                 if (!item.IsCollection)
                 {
                     string encodedPath = item.Href.Replace("/public.php/webdav", "/download?path=");
-                    string path = HttpUtility.UrlDecode(item.Href).Replace("/public.php/webdav", "");
+                    string path = Uri.UnescapeDataString(item.Href).Replace("/public.php/webdav", "");
                     string parentFolderPath = GetParentCloudPath(path);
                     string url = allsyncRootFolderAddress.Replace("?path=", "") + encodedPath;
                     CloudFile file = new CloudFile(
@@ -533,6 +573,7 @@ namespace CloudFolderBrowser
                             );
                     file.Path = path;
                     file.PublicUrl = new Uri(url);
+                    file.HasKnownSize = item.ContentLength.HasValue;
                     //file.PublicUrl = (webdavClient as Client).GetServerUrl(path, false).Result.Uri;
 
                     CloudFolder? parentFolder;
@@ -603,7 +644,7 @@ namespace CloudFolderBrowser
         {
             NetworkCredential webdavCredential = new NetworkCredential { UserName = folderKey, Password = password };
 
-            webdavClient = NetworkClientAdapters.CreateWebDavClient(webdavCredential);
+            webdavClient = NetworkClientAdapters.CreateWebDavClient(webdavCredential, cloudflareSession: FlareSolverrSession);
             webdavClient.Server = allsyncUrl;
             webdavClient.BasePath = $"/public.php/webdav/";
             Dictionary<string, string> customHeaders = new Dictionary<string, string>();
@@ -612,12 +653,6 @@ namespace CloudFolderBrowser
             customHeaders.Add("Accept", @"*/*");
             customHeaders.Add("Accept-Language", "en-US,en;q=0.5");
 
-            if (FlareSolverrSession != null)
-            {
-                var cookieHeader = FlareSolverrSession.GetCookieHeader(new Uri(allsyncUrl));
-                if (!string.IsNullOrWhiteSpace(cookieHeader))
-                    customHeaders.Add("Cookie", cookieHeader);
-            }
 
             webdavClient.UserAgent = string.IsNullOrWhiteSpace(UserAgent)
                 ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CloudFolderBrowser/1.0"

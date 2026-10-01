@@ -86,8 +86,9 @@ namespace CloudFolderBrowser
             Files = new List<CloudFile>();            
         }
 
-        public CloudFolder()
+        public CloudFolder() : this(string.Empty, DateTime.MinValue, DateTime.MinValue, 0)
         {
+            Path = "/";
         }
 
         public void AddFile(CloudFile file)
@@ -142,12 +143,28 @@ namespace CloudFolderBrowser
                 throw new InvalidOperationException("A source URL is required before the folder list can be saved.");
 
             var appPath = Directory.GetCurrentDirectory();
-            Directory.CreateDirectory($"{appPath}\\jsons");
+            string cacheDirectory = System.IO.Path.Combine(appPath, "jsons");
+            Directory.CreateDirectory(cacheDirectory);
             string hashString = Utility.GetHashString(OriginalString);            
-            File.WriteAllText($"{appPath}\\jsons\\" + hashString + ".json", JsonConvert.SerializeObject(this, new JsonSerializerSettings()
+            string cachePath = System.IO.Path.Combine(cacheDirectory, hashString + ".json");
+            string temporaryPath = cachePath + ".tmp";
+            try
             {
-                TypeNameHandling = TypeNameHandling.Auto
-            }));
+                File.WriteAllText(temporaryPath, SavedFolderCache.Serialize(this));
+                File.Move(temporaryPath, cachePath, true);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+                }
+                catch (System.Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Unable to remove temporary folder cache: {ex.Message}");
+                }
+            }
         }        
 
         public Task<CloudFolder?> LoadFromJson(bool checkStatus = false)
@@ -162,10 +179,7 @@ namespace CloudFolderBrowser
                 if (fileName == $"{appPath}\\jsons\\" + hashString + ".json")
                 {
                     string jsonString = File.ReadAllText(fileName);
-                    cloudFolder = JsonConvert.DeserializeObject<CloudFolder>(jsonString, new JsonSerializerSettings()
-                    {
-                        TypeNameHandling = TypeNameHandling.Auto
-                    }) ?? new CloudFolder();
+                    cloudFolder = SavedFolderCache.Deserialize(jsonString) ?? new CloudFolder();
                     return Task.FromResult<CloudFolder?>(cloudFolder);
                 }
             }

@@ -182,13 +182,15 @@ public sealed class SyncPreviewForm : ThemedForm
             }
         }
 
-        var duplicateTargets = _rows
-            .Where(row => row.Action != SyncPlanAction.Skip)
-            .GroupBy(row => row.GetTargetPath(), StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault(group => group.Count() > 1);
-        if (duplicateTargets != null)
+        try
         {
-            MessageBox.Show($"Multiple files map to the same target: {duplicateTargets.Key}");
+            Utility.ValidateDownloadTargets(_rows
+                .Where(row => row.Action != SyncPlanAction.Skip)
+                .Select(row => row.GetTargetPath()));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            MessageBox.Show(ex.Message, "Invalid download paths", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -212,6 +214,7 @@ public sealed class SyncPreviewForm : ThemedForm
     {
         private readonly SyncPlanItem _item;
         private readonly SyncPlanAction _suggestedAction;
+        private readonly string _suggestedTargetName;
 
         public SyncPlanAction Action { get; set; }
         public string TargetName { get; set; }
@@ -224,6 +227,7 @@ public sealed class SyncPreviewForm : ThemedForm
         {
             _item = item;
             _suggestedAction = item.Action;
+            _suggestedTargetName = item.TargetName;
             Action = item.Action;
             TargetName = item.TargetName;
         }
@@ -231,20 +235,17 @@ public sealed class SyncPreviewForm : ThemedForm
         public void Reset()
         {
             Action = _suggestedAction;
-            TargetName = _item.File.Name;
+            TargetName = _suggestedTargetName;
         }
 
         public string GetTargetPath()
         {
-            _item.Action = Action;
-            _item.TargetName = TargetName;
-            return _item.GetTargetCloudPath();
+            return _item.GetTargetLocalPath(Action, TargetName);
         }
 
         public string GetSafeTargetName()
         {
-            _item.TargetName = TargetName;
-            return _item.GetSafeTargetName();
+            return Utility.GetSafePathName(TargetName);
         }
 
         public CloudFile Apply()

@@ -38,12 +38,46 @@ namespace CloudFolderBrowser
             {
                 "CON", "PRN", "AUX", "NUL",
                 "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+                "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"
             };
             if (reservedNames.Contains(baseName, StringComparer.OrdinalIgnoreCase))
                 safeName = "_" + safeName;
 
             return safeName;
+        }
+
+        public static void ValidateDownloadTargets(IEnumerable<string> paths)
+        {
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var artifacts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in paths)
+            {
+                string target = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!targets.Add(target))
+                    throw new InvalidDataException($"Multiple files map to the same download path: {target}");
+                artifacts.Add(target + ".part");
+                artifacts.Add(target + ".part.assembling");
+                artifacts.Add(target + ".part.segments.json");
+                artifacts.Add(target + ".part.segments.json.tmp");
+            }
+
+            string[] orderedTargets = targets.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (string target in targets)
+            {
+                for (string? ancestor = target; ancestor != null; ancestor = Path.GetDirectoryName(ancestor))
+                {
+                    if (artifacts.Contains(ancestor) || (ancestor != target && targets.Contains(ancestor)))
+                        throw new InvalidDataException($"Download path overlaps another file or its transfer data: {target}");
+                }
+
+                string segmentPrefix = target + ".part.segment.";
+                int index = Array.BinarySearch(orderedTargets, segmentPrefix, StringComparer.OrdinalIgnoreCase);
+                if (index < 0)
+                    index = ~index;
+                if (index < orderedTargets.Length && orderedTargets[index].StartsWith(segmentPrefix, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"Download path overlaps segment transfer data: {orderedTargets[index]}");
+            }
         }
 
         public static string GetSafeDownloadPath(string rootPath, string cloudPath)

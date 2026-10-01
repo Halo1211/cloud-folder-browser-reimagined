@@ -23,12 +23,14 @@ namespace CloudFolderBrowser
         private readonly SemaphoreSlim _flareSolverrRefreshLock = new(1, 1);
         private DateTime _lastFlareSolverrRefreshUtc = DateTime.MinValue;
         private int _completionSignaled;
+        private int _startRequested;
         private int _activeDownloads;
         private int _downloadClientDisposed;
         private readonly int _maximumDownloadsPerHost;
         private readonly Dictionary<string, int> _activeDownloadsByHost =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly object _schedulerGate = new();
+        private readonly CookieContainer _sessionCookies = new();
 
         public CommonDownload(List<CloudFile> files, ProgressBar[] progressBars,
             Label[] progressLabels, ToolTip toolTip, CloudServiceType cloudServiceType,
@@ -40,6 +42,13 @@ namespace CloudFolderBrowser
             string requestedRouteId = DownloadRouteIds.Direct)
             : base(historyStore, checksumStore)
         {
+            ValidateProgressControls(progressBars, progressLabels);
+            DownloadFolderPath = folderNewFiles
+                ? Path.GetFullPath(Path.Combine(baseDownloadPath, "0_New Files", DateTime.Now.ToString("yyyy-MM-dd")))
+                : Path.GetFullPath(baseDownloadPath);
+            Utility.ValidateDownloadTargets(files.Select(file => string.IsNullOrWhiteSpace(file.LocalSavePathOverride)
+                ? Utility.GetSafeDownloadPath(DownloadFolderPath, Utility.ApplyFileNameOverride(file.Path, file.LocalNameOverride))
+                : file.LocalSavePathOverride));
             progressbars = progressBars;
             progresslabels = progressLabels;
             Downloads = new List<IFileDownload>();
@@ -71,25 +80,16 @@ namespace CloudFolderBrowser
                     4,
                     16),
                 routeKey: cloudServiceType.ToString());
+            handler.CookieContainer = _sessionCookies;
+            FlareSolverrSession?.ApplyCookies(_sessionCookies);
             DownloadClient = new HttpClient(handler)
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
             DownloadClient.DefaultRequestHeaders.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
             DownloadClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
-            if (networkCredential != null)
-            {
-                var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes(
-                    $"{networkCredential.UserName}:{networkCredential.Password}"));
-                DownloadClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", basic);
-            }
 
             FailedDownloads = new List<IFileDownload>();
-
-            if (folderNewFiles)
-                DownloadFolderPath = Path.Combine(baseDownloadPath, "0_New Files", DateTime.Now.ToString("yyyy-MM-dd"));
-            else
-                DownloadFolderPath = Path.GetFullPath(baseDownloadPath);
 
             Directory.CreateDirectory(DownloadFolderPath);
             var invalidFiles = new List<string>();
@@ -117,6 +117,8 @@ namespace CloudFolderBrowser
                         SourceUrl = file.PublicUrl?.AbsoluteUri ?? string.Empty,
                         SavePath = savePath,
                         ExpectedSize = file.Size,
+                        HasKnownSize = file.HasKnownSize,
+                        RequiresLinkResolver = file.RequiresLinkResolver,
                         RequestedRouteId = requestedRouteId,
                         EffectiveRouteId = linkResolver == null ? DownloadRouteIds.Direct : string.Empty,
                         EffectiveRouteName = linkResolver == null ? "Direct" : string.Empty,
@@ -142,7 +144,13 @@ namespace CloudFolderBrowser
 
         public override async Task Start()
         {
-            semaphoreSlim = new SemaphoreSlim(1, 1);
+            if (Interlocked.Exchange(ref _startRequested, 1) != 0)
+                return;
+            if (CancellationTokenSource.IsCancellationRequested)
+            {
+                await CompleteCancelledDownloadsAsync();
+                return;
+            }
             try
             {
                 DownloadHistoryEntry[] queuedEntries = Downloads
@@ -163,8 +171,7 @@ namespace CloudFolderBrowser
 
             if (CancellationTokenSource.IsCancellationRequested)
             {
-                DisposeDownloadClient();
-                SignalDownloadCompleted();
+                await CompleteCancelledDownloadsAsync();
                 return;
             }
 
@@ -331,6 +338,7 @@ namespace CloudFolderBrowser
             }
             catch (OperationCanceledException) when (CancellationTokenSource.IsCancellationRequested)
             {
+                await download.UpdateHistoryAsync(DownloadJobStatus.Paused);
             }
             catch (Exception ex)
             {
@@ -347,8 +355,7 @@ namespace CloudFolderBrowser
                 if (Interlocked.Decrement(ref _activeDownloads) == 0
                     && CancellationTokenSource.IsCancellationRequested)
                 {
-                    DisposeDownloadClient();
-                    SignalDownloadCompleted();
+                    await CompleteCancelledDownloadsAsync();
                 }
             }
         }
@@ -378,8 +385,11 @@ namespace CloudFolderBrowser
                 using var flareSolverr = new FlareSolverrClient(
                     Properties.Settings.Default.flareSolverrUrl,
                     TimeSpan.FromSeconds(timeoutSeconds));
-                FlareSolverrSession = await flareSolverr.GetSessionAsync(targetUrl, cancellationToken)
+                CloudflareSession refreshedSession = await flareSolverr.GetSessionAsync(targetUrl, cancellationToken)
                     .ConfigureAwait(false);
+                FlareSolverrSession?.ApplyCookies(_sessionCookies, expire: true);
+                refreshedSession.ApplyCookies(_sessionCookies);
+                FlareSolverrSession = refreshedSession;
                 _lastFlareSolverrRefreshUtc = DateTime.UtcNow;
                 return true;
             }
@@ -399,9 +409,15 @@ namespace CloudFolderBrowser
             CancellationTokenSource.Cancel();
             if (Volatile.Read(ref _activeDownloads) == 0)
             {
-                DisposeDownloadClient();
-                SignalDownloadCompleted();
+                _ = CompleteCancelledDownloadsAsync();
             }
+        }
+
+        private async Task CompleteCancelledDownloadsAsync()
+        {
+            await PauseQueuedDownloadsAsync();
+            DisposeDownloadClient();
+            SignalDownloadCompleted();
         }
 
         private void DisposeDownloadClient()

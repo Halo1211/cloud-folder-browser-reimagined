@@ -58,7 +58,7 @@ public static class ProviderProxyRuleStore
         {
             return JsonConvert.DeserializeObject<List<ProviderProxyRule>>(
                     Properties.Settings.Default.providerProxyRulesJson ?? "[]")
-                ?.Where(rule => !string.IsNullOrWhiteSpace(rule.RouteKey)
+                ?.Where(rule => rule != null && !string.IsNullOrWhiteSpace(rule.RouteKey)
                     && Enum.IsDefined(typeof(ProxyMode), rule.Mode))
                 .GroupBy(rule => rule.RouteKey, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.Last())
@@ -74,7 +74,7 @@ public static class ProviderProxyRuleStore
     public static void Save(IEnumerable<ProviderProxyRule> rules)
     {
         ProviderProxyRule[] values = rules
-            .Where(rule => !string.IsNullOrWhiteSpace(rule.RouteKey))
+            .Where(rule => rule != null && !string.IsNullOrWhiteSpace(rule.RouteKey))
             .GroupBy(rule => rule.RouteKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
             .OrderBy(rule => rule.RouteKey, StringComparer.OrdinalIgnoreCase)

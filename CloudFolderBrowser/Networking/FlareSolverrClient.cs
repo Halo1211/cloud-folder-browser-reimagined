@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using System.Net;
 using System.Net.Http.Json;
 
 namespace CloudFolderBrowser.Networking
@@ -45,21 +46,52 @@ namespace CloudFolderBrowser.Networking
 
         public string GetCookieHeader(Uri requestUri)
         {
-            if (requestUri == null)
+            if (requestUri == null || !requestUri.IsAbsoluteUri
+                || (requestUri.Scheme != Uri.UriSchemeHttp
+                && requestUri.Scheme != Uri.UriSchemeHttps))
                 return string.Empty;
 
             return string.Join("; ", Cookies
-                .Where(cookie => !string.IsNullOrWhiteSpace(cookie.Name))
+                .Where(cookie => cookie != null && IsValidCookie(cookie))
                 .Where(cookie => DomainMatches(requestUri.Host, cookie.Domain))
                 .Where(cookie => PathMatches(requestUri.AbsolutePath, cookie.Path))
                 .Where(cookie => !cookie.Secure || requestUri.Scheme == Uri.UriSchemeHttps)
                 .Select(cookie => $"{cookie.Name}={cookie.Value}"));
         }
 
+        internal void ApplyCookies(CookieContainer container, bool expire = false)
+        {
+            foreach (FlareSolverrCookie cookie in Cookies.Where(cookie => cookie != null && IsValidCookie(cookie)))
+            {
+                try
+                {
+                    container.Add(new Cookie(cookie.Name, cookie.Value,
+                        string.IsNullOrWhiteSpace(cookie.Path) ? "/" : cookie.Path, cookie.Domain)
+                    {
+                        Secure = cookie.Secure,
+                        Expired = expire
+                    });
+                }
+                catch (CookieException)
+                {
+                    // A malformed browser cookie must not prevent the other
+                    // cookies from being used or become an unscoped raw header.
+                }
+            }
+        }
+
+        private static bool IsValidCookie(FlareSolverrCookie cookie) =>
+            !string.IsNullOrWhiteSpace(cookie.Name)
+            && !string.IsNullOrWhiteSpace(cookie.Domain)
+            && cookie.Name.All(character => character > ' ' && character < 127
+                && !"()<>@,;:\\\"/[]?={}".Contains(character))
+            && cookie.Value != null
+            && cookie.Value.All(character => !char.IsControl(character) && character != ';');
+
         private static bool DomainMatches(string host, string cookieDomain)
         {
             if (string.IsNullOrWhiteSpace(cookieDomain))
-                return true;
+                return false;
 
             var normalizedDomain = cookieDomain.TrimStart('.');
             return host.Equals(normalizedDomain, StringComparison.OrdinalIgnoreCase)
@@ -95,8 +127,9 @@ namespace CloudFolderBrowser.Networking
 
         public async Task<CloudflareSession> GetSessionAsync(Uri targetUrl, CancellationToken cancellationToken)
         {
-            if (targetUrl == null || !targetUrl.IsAbsoluteUri)
-                throw new ArgumentException("A valid absolute target URL is required.", nameof(targetUrl));
+            if (targetUrl == null || !targetUrl.IsAbsoluteUri
+                || (targetUrl.Scheme != Uri.UriSchemeHttp && targetUrl.Scheme != Uri.UriSchemeHttps))
+                throw new ArgumentException("An absolute HTTP or HTTPS target URL is required.", nameof(targetUrl));
 
             var request = new
             {

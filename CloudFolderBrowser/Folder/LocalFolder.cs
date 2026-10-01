@@ -8,9 +8,16 @@ namespace CloudFolderBrowser
 {
     public class LocalFolder : Folder
     {
-        public List<FileInfo> Files { get; set; }
+        public List<FileInfo> Files { get; set; } = new();
 
-        public LocalFolder() { }
+        public override int FilesNumberTopDirectoryOnly => Files?.Count ?? 0;
+
+        public LocalFolder()
+        {
+            Name = string.Empty;
+            Path = string.Empty;
+            Subfolders = new List<IFolder>();
+        }
 
         public LocalFolder(DirectoryInfo di, CancellationToken cancellationToken = default)
             : this(di, new HashSet<string>(StringComparer.OrdinalIgnoreCase), cancellationToken)
@@ -52,8 +59,23 @@ namespace CloudFolderBrowser
             foreach (FileInfo file in EnumerateFilesSafely(di))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                TryAddScannedFile(file);
+            }
+        }
+
+        internal bool TryAddScannedFile(FileInfo file)
+        {
+            try
+            {
+                long length = file.Length;
                 Files.Add(file);
-                SizeTopDirectoryOnly += file.Length;
+                SizeTopDirectoryOnly += length;
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Skipping local file {file.FullName}: {ex.Message}");
+                return false;
             }
         }
 

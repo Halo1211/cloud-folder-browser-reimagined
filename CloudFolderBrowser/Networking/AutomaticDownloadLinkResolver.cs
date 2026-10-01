@@ -135,7 +135,6 @@ public sealed class AutomaticDownloadLinkResolver : IAutomaticDownloadLinkResolv
                 AdvanceCandidate(state, candidateIndex);
                 continue;
             }
-            IDownloadLinkResolver resolver = GetResolver(account);
             lock (state.Gate)
             {
                 state.CurrentIsDirect = false;
@@ -145,6 +144,7 @@ public sealed class AutomaticDownloadLinkResolver : IAutomaticDownloadLinkResolv
 
             try
             {
+                IDownloadLinkResolver resolver = GetResolver(account);
                 var started = System.Diagnostics.Stopwatch.StartNew();
                 DebridResolvedLink resolved = await resolver.ResolveAsync(source, cancellationToken)
                     .ConfigureAwait(false);
@@ -167,7 +167,9 @@ public sealed class AutomaticDownloadLinkResolver : IAutomaticDownloadLinkResolv
             catch (Exception ex) when (ex is HttpRequestException
                 or InvalidOperationException
                 or InvalidDataException
-                or TimeoutException)
+                or TimeoutException
+                or NotSupportedException
+                or OperationCanceledException)
             {
                 failures.Add($"{account.ProviderName}: {SanitizeFailure(ex.Message)}");
                 RecordRouteFailure(account.Id, source.Host, ex, immediateCooldown: true);

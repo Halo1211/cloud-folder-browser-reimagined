@@ -32,7 +32,7 @@ namespace CloudFolderBrowser
 
         public CommonFileDownload(CommonDownload commonDownload, CloudFile fileInfo, string savePath, NetworkCredential? networkCredential)
         {
-            SavePath = savePath.Replace("%27", "'").Replace("/", "\\");
+            SavePath = Path.GetFullPath(savePath);
             FileInfo = fileInfo;
             ParentDownload = commonDownload;
             _networkCredential = networkCredential;
@@ -61,7 +61,10 @@ namespace CloudFolderBrowser
                 FileInfo.Size = total;
                 FileInfo.HasKnownSize = true;
                 if (HistoryEntry != null)
+                {
                     HistoryEntry.ExpectedSize = total;
+                    HistoryEntry.HasKnownSize = true;
+                }
             }
             if (total <= 0)
                 total = FileInfo.Size;
@@ -117,7 +120,10 @@ namespace CloudFolderBrowser
                             ParentDownload.CancellationTokenSource.Token);
                         downloadUri = resolved.DownloadUri;
                         if (HistoryEntry != null && FileInfo.HasKnownSize)
+                        {
                             HistoryEntry.ExpectedSize = FileInfo.Size;
+                            HistoryEntry.HasKnownSize = true;
+                        }
                         if (HistoryEntry != null)
                         {
                             HistoryEntry.EffectiveRouteId = resolved.RouteId;
@@ -129,16 +135,13 @@ namespace CloudFolderBrowser
                         refreshResolvedLink = false;
                     }
 
-                    if (!FileInfo.HasKnownSize || !File.Exists(partialPath) || new FileInfo(partialPath).Length != FileInfo.Size)
-                    {
-                        DownloadTask = DownloadFileAsync(
-                            downloadUri,
-                            sourceUri.AbsoluteUri,
-                            partialPath,
-                            ParentDownload.CancellationTokenSource.Token,
-                            ProgressChanged);
-                        await DownloadTask;
-                    }
+                    DownloadTask = DownloadFileAsync(
+                        downloadUri,
+                        sourceUri.AbsoluteUri,
+                        partialPath,
+                        ParentDownload.CancellationTokenSource.Token,
+                        ProgressChanged);
+                    await DownloadTask;
 
                     var actualSize = new FileInfo(partialPath).Length;
                     if (FileInfo.HasKnownSize && actualSize != FileInfo.Size)
@@ -162,6 +165,10 @@ namespace CloudFolderBrowser
                                 SavePath,
                                 ParentDownload.CancellationTokenSource.Token);
                             postProcessingMessage = result.Processed ? string.Empty : result.Message;
+                        }
+                        catch (OperationCanceledException) when (ParentDownload.CancellationTokenSource.IsCancellationRequested)
+                        {
+                            postProcessingMessage = "Post-processing cancelled; the downloaded file is complete.";
                         }
                         catch (Exception ex) when (ex is IOException
                             or InvalidDataException
@@ -277,54 +284,27 @@ namespace CloudFolderBrowser
                 return true;
             }
 
-            var complete = FileInfo.HasKnownSize && destination.Length == FileInfo.Size;
-            if (complete)
-            {
-                var overwrite = FileInfo.PlannedAction == SyncPlanAction.Overwrite
-                    ? DialogResult.Yes
-                    : ParentDownload.OverwriteMode switch
-                    {
-                        0 => DialogResult.No,
-                        1 => DialogResult.Yes,
-                        2 => FileInfo.Modified > destination.LastWriteTime ? DialogResult.Yes : DialogResult.No,
-                        _ => MessageBox.Show(
-                            $"File [{destination.Name}] already exists. Overwrite?",
-                            string.Empty,
-                            MessageBoxButtons.YesNo)
-                    };
-
-                if (overwrite == DialogResult.No)
+            var overwrite = FileInfo.PlannedAction == SyncPlanAction.Overwrite
+                ? DialogResult.Yes
+                : ParentDownload.OverwriteMode switch
                 {
-                    AdaptiveSegmentedDownloader.DeleteSegmentArtifacts(partialPath);
-                    return false;
-                }
+                    0 => DialogResult.No,
+                    1 => DialogResult.Yes,
+                    2 => FileInfo.Modified > destination.LastWriteTime ? DialogResult.Yes : DialogResult.No,
+                    _ => MessageBox.Show(
+                        $"File [{destination.Name}] already exists. Overwrite?",
+                        string.Empty,
+                        MessageBoxButtons.YesNo)
+                };
 
-                if (File.Exists(partialPath))
-                    File.Delete(partialPath);
-                AdaptiveSegmentedDownloader.DeleteSegmentArtifacts(partialPath);
+            if (overwrite == DialogResult.No)
+                return false;
+
+            // A final file may belong to an older remote version. Never use its
+            // bytes as a resume prefix or remove it before its replacement succeeds.
+            // Only the explicitly partial .part path is eligible for resuming.
+            if (FileInfo.PlannedAction != SyncPlanAction.Overwrite)
                 return true;
-            }
-
-            // Preserve the longest valid partial file. Older versions wrote partial
-            // data directly to the final path, so migrate it to the .part file.
-            if (!FileInfo.HasKnownSize || destination.Length < FileInfo.Size)
-            {
-                var partialLength = File.Exists(partialPath) ? new FileInfo(partialPath).Length : -1;
-                if (destination.Length > partialLength)
-                {
-                    if (File.Exists(partialPath))
-                        File.Delete(partialPath);
-                    AdaptiveSegmentedDownloader.DeleteSegmentArtifacts(partialPath);
-                    File.Move(SavePath, partialPath);
-                }
-                else
-                {
-                    destination.Delete();
-                }
-                return true;
-            }
-
-            destination.Delete();
             if (File.Exists(partialPath))
                 File.Delete(partialPath);
             AdaptiveSegmentedDownloader.DeleteSegmentArtifacts(partialPath);
@@ -438,10 +418,20 @@ namespace CloudFolderBrowser
             {
                 if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable
                     && existingLength > 0
-                    && response.Content.Headers.ContentRange?.Length == existingLength)
+                    && response.Content.Headers.ContentRange is { HasRange: false } completeRange
+                    && string.Equals(completeRange.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
+                    && completeRange.Length == existingLength)
                 {
                     // A resumed file can already be complete when its original size was
                     // unknown. RFC 9110 represents that case as "bytes */<length>".
+                    if (FileInfo.HasKnownSize && existingLength != FileInfo.Size)
+                        throw new InvalidDataException("The remote size differs from the expected file size.");
+                    RemoteChecksum? checksum = ParentDownload.ValidateRemoteChecksums
+                        ? RemoteChecksumValidator.Read(response, includeContentMd5: false)
+                        : null;
+                    await RemoteChecksumValidator.ValidateFileAsync(outputFile, checksum, cancellationToken)
+                        .ConfigureAwait(false);
+                    SetKnownSize(existingLength);
                     progressCallback(existingLength, existingLength);
                     return;
                 }
@@ -459,17 +449,27 @@ namespace CloudFolderBrowser
                 {
                     RemoteChecksum? responseChecksum = RemoteChecksumValidator.Read(
                         response,
-                        includeContentMd5: existingLength == 0
-                            && response.StatusCode == HttpStatusCode.OK);
-                    if (responseChecksum != null)
-                        _expectedRemoteChecksum = responseChecksum;
+                        includeContentMd5: response.StatusCode == HttpStatusCode.OK);
+                    // A full response replaces the representation, including any
+                    // checksum remembered from an earlier failed attempt.
+                    _expectedRemoteChecksum = responseChecksum
+                        ?? (response.StatusCode == HttpStatusCode.PartialContent ? _expectedRemoteChecksum : null);
                 }
 
                 var append = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
-                if (append && response.Content.Headers.ContentRange?.From != existingLength)
+                ContentRangeHeaderValue? range = response.StatusCode == HttpStatusCode.PartialContent
+                    ? response.Content.Headers.ContentRange : null;
+                if (response.StatusCode == HttpStatusCode.PartialContent
+                    && (range == null || !string.Equals(range.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
+                        || range.From != (append ? existingLength : 0)
+                        || range.To is not long end
+                        || range.Length is not long length
+                        || end != length - 1
+                        || (response.Content.Headers.ContentLength is long contentLength
+                            && contentLength != end - range.From + 1)))
                 {
                     throw new InvalidDataException(
-                        $"Server resumed at byte {response.Content.Headers.ContentRange?.From}, expected {existingLength}.");
+                        "Server returned an inconsistent Content-Range for the download.");
                 }
 
                 if (!append)
@@ -479,10 +479,15 @@ namespace CloudFolderBrowser
                     existingLength = 0;
                 }
 
-                var responseTotal = response.Content.Headers.ContentRange?.Length
+                var responseTotal = range?.Length
                     ?? (response.Content.Headers.ContentLength.HasValue
                         ? existingLength + response.Content.Headers.ContentLength.Value
                         : FileInfo.Size);
+
+                if (FileInfo.HasKnownSize && responseTotal != FileInfo.Size)
+                    throw new InvalidDataException($"Server reports {responseTotal} bytes, expected {FileInfo.Size} bytes.");
+                if (response.Content.Headers.ContentLength.HasValue || range?.Length != null)
+                    SetKnownSize(responseTotal);
 
                 await using var destination = new FileStream(
                     outputFile,
@@ -543,13 +548,37 @@ namespace CloudFolderBrowser
                     _expectedRemoteChecksum,
                     cancellationToken).ConfigureAwait(false);
 
+                SetKnownSize(totalRead);
+
                 Debug.Assert(totalRead >= 0);
+            }
+        }
+
+        private void SetKnownSize(long size)
+        {
+            if (FileInfo.HasKnownSize)
+                return;
+            FileInfo.Size = size;
+            FileInfo.HasKnownSize = true;
+            if (HistoryEntry != null)
+            {
+                HistoryEntry.ExpectedSize = size;
+                HistoryEntry.HasKnownSize = true;
             }
         }
 
         private HttpRequestMessage CreateDownloadRequest(Uri downloadUri)
         {
             var request = new HttpRequestMessage(HttpMethod.Get, downloadUri);
+            if (_networkCredential != null && FileInfo.PublicUrl is { IsAbsoluteUri: true } source
+                && source.GetLeftPart(UriPartial.Authority).Equals(
+                    downloadUri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
+            {
+                string basic = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                    $"{_networkCredential.UserName}:{_networkCredential.Password}"));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
+            }
+            request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("identity"));
             var flareSolverrSession = ParentDownload.FlareSolverrSession;
             var userAgent = flareSolverrSession?.UserAgent;
             request.Headers.TryAddWithoutValidation(
@@ -557,14 +586,14 @@ namespace CloudFolderBrowser
                 string.IsNullOrWhiteSpace(userAgent)
                     ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CloudFolderBrowser/1.0"
                     : userAgent);
-            var cookieHeader = flareSolverrSession?.GetCookieHeader(downloadUri);
-            if (!string.IsNullOrWhiteSpace(cookieHeader))
-                request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
             return request;
         }
 
         private void ValidatePayloadResponse(HttpResponseMessage response, Uri downloadUri)
         {
+            if (response.Content.Headers.ContentEncoding.Any(encoding =>
+                !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("Server returned a content encoding that would change the downloaded file bytes.");
             if (response.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.ResetContent)
             {
                 throw new InvalidDataException(

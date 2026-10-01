@@ -112,9 +112,21 @@ public sealed class CloudProviderRegistry
         ICloudProviderDescriptor[] providers;
         lock (_gate)
             providers = _providers.ToArray();
-        return providers.FirstOrDefault(provider =>
-            provider.Capabilities.HasFlag(CloudProviderCapabilities.Browse)
-            && provider.CanHandle(uri));
+        foreach (ICloudProviderDescriptor provider in providers)
+        {
+            try
+            {
+                if (provider.Capabilities.HasFlag(CloudProviderCapabilities.Browse)
+                    && provider.CanHandle(uri))
+                    return provider;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Provider '{provider.GetType().FullName}' could not inspect this URL: {ex.Message}");
+            }
+        }
+        return null;
     }
 
     public async Task<CloudFolder> LoadAsync(

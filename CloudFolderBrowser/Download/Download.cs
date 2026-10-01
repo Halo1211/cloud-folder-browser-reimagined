@@ -12,6 +12,8 @@ namespace CloudFolderBrowser
         internal DownloadHistoryStore HistoryStore { get; }
 
         internal ChecksumManifestStore ChecksumStore { get; }
+        private readonly object _pauseGate = new();
+        private Task? _pauseQueuedTask;
 
         protected Download(
             DownloadHistoryStore? historyStore = null,
@@ -71,5 +73,39 @@ namespace CloudFolderBrowser
 
         public abstract Task Start();
         public abstract void Stop();
+
+        protected Task PauseQueuedDownloadsAsync()
+        {
+            lock (_pauseGate)
+                return _pauseQueuedTask ??= PauseQueuedDownloadsCoreAsync();
+        }
+
+        private async Task PauseQueuedDownloadsCoreAsync()
+        {
+            try
+            {
+                DownloadHistoryEntry[] entries = Downloads.OfType<FileDownload>()
+                    .Where(download => download.HistoryEntry?.Status == DownloadJobStatus.Queued)
+                    .Select(download => download.PrepareHistoryEntry(DownloadJobStatus.Paused))
+                    .OfType<DownloadHistoryEntry>()
+                    .ToArray();
+                if (entries.Length > 0)
+                    await HistoryStore.UpsertManyAsync(entries);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or Newtonsoft.Json.JsonException or System.Security.Cryptography.CryptographicException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Unable to persist paused downloads: {ex.Message}");
+            }
+        }
+
+        protected static void ValidateProgressControls(ProgressBar[] bars, Label[] labels)
+        {
+            ArgumentNullException.ThrowIfNull(bars);
+            ArgumentNullException.ThrowIfNull(labels);
+            if (bars.Length == 0 || labels.Length < bars.Length + 1
+                || bars.Any(bar => bar == null) || labels.Any(label => label == null))
+                throw new ArgumentException("Downloads require at least one progress bar, one label per worker, and a summary label.");
+        }
     }
 }

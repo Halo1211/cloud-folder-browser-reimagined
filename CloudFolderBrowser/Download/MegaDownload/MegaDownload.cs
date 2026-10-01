@@ -8,6 +8,7 @@ namespace CloudFolderBrowser
     public class MegaDownload: Download
     {
         private int _completionSignaled;
+        private int _startRequested;
         private int _activeDownloads;
         public string ShareId;      
 
@@ -17,6 +18,13 @@ namespace CloudFolderBrowser
             string requestedRouteId = DownloadRouteIds.Direct)
             : base(historyStore, checksumStore)
         {
+            ValidateProgressControls(progressBars, progressLabels);
+            DownloadFolderPath = folderNewFiles
+                ? Path.GetFullPath(Path.Combine(baseDownloadPath, "0_New Files", DateTime.Now.ToString("yyyy-MM-dd")))
+                : Path.GetFullPath(baseDownloadPath);
+            Utility.ValidateDownloadTargets(files.Select(file => string.IsNullOrWhiteSpace(file.LocalSavePathOverride)
+                ? Utility.GetSafeDownloadPath(DownloadFolderPath, Utility.ApplyFileNameOverride(file.Path, file.LocalNameOverride))
+                : file.LocalSavePathOverride));
             progressbars = progressBars;
             progresslabels = progressLabels;
             ToolTip = toolTip;
@@ -27,11 +35,6 @@ namespace CloudFolderBrowser
 
             //MegaApiClient megaApiClient = new MegaApiClient();
             //megaApiClient.LoginAnonymous();
-
-            if (folderNewFiles)
-                DownloadFolderPath = Path.Combine(baseDownloadPath, "0_New Files", DateTime.Now.ToString("yyyy-MM-dd"));
-            else
-                DownloadFolderPath = Path.GetFullPath(baseDownloadPath);
 
             Directory.CreateDirectory(DownloadFolderPath);
             var invalidFiles = new List<string>();
@@ -65,6 +68,8 @@ namespace CloudFolderBrowser
                         SourceUrl = file.PublicUrl?.AbsoluteUri ?? string.Empty,
                         SavePath = savePath,
                         ExpectedSize = file.Size,
+                        HasKnownSize = file.HasKnownSize,
+                        RequiresLinkResolver = file.RequiresLinkResolver,
                         RequestedRouteId = requestedRouteId,
                         EffectiveRouteId = DownloadRouteIds.MegaNative,
                         EffectiveRouteName = "MEGA native",
@@ -90,6 +95,13 @@ namespace CloudFolderBrowser
 
         public override async Task Start()
         {
+            if (Interlocked.Exchange(ref _startRequested, 1) != 0)
+                return;
+            if (CancellationTokenSource.IsCancellationRequested)
+            {
+                await CompleteCancelledDownloadsAsync();
+                return;
+            }
             progresslabels[progresslabels.Length - 1].Text = "";
             progresslabels[progresslabels.Length - 1].Visible = true;
 
@@ -113,7 +125,7 @@ namespace CloudFolderBrowser
 
             if (CancellationTokenSource.IsCancellationRequested)
             {
-                SignalDownloadCompleted();
+                await CompleteCancelledDownloadsAsync();
                 return;
             }
 
@@ -201,6 +213,7 @@ namespace CloudFolderBrowser
             }
             catch (OperationCanceledException) when (CancellationTokenSource.IsCancellationRequested)
             {
+                await download.UpdateHistoryAsync(DownloadJobStatus.Paused);
             }
             catch (Exception ex)
             {
@@ -217,7 +230,7 @@ namespace CloudFolderBrowser
                 if (Interlocked.Decrement(ref _activeDownloads) == 0
                     && CancellationTokenSource.IsCancellationRequested)
                 {
-                    SignalDownloadCompleted();
+                    await CompleteCancelledDownloadsAsync();
                 }
             }
         }
@@ -232,7 +245,13 @@ namespace CloudFolderBrowser
         {
             CancellationTokenSource.Cancel();
             if (Volatile.Read(ref _activeDownloads) == 0)
-                SignalDownloadCompleted();
+                _ = CompleteCancelledDownloadsAsync();
+        }
+
+        private async Task CompleteCancelledDownloadsAsync()
+        {
+            await PauseQueuedDownloadsAsync();
+            SignalDownloadCompleted();
         }
 
         private void SignalDownloadCompleted()

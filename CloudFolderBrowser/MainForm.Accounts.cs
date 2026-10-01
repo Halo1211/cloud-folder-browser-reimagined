@@ -208,9 +208,7 @@ public partial class MainForm
     {
         if (string.IsNullOrWhiteSpace(serializedToken))
             throw new InvalidDataException("The saved MEGA session is empty.");
-        var token = JsonConvert.DeserializeObject<MegaApiClient.LogonSessionToken>(
-            serializedToken,
-            new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto })
+        var token = Networking.MegaSessionTokenCodec.Deserialize(serializedToken)
             ?? throw new InvalidDataException("The saved MEGA session is invalid.");
         await LoginMega(token);
         Properties.Settings.Default.loginTokenMega = serializedToken;

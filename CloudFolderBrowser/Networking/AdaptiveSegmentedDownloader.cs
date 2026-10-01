@@ -112,6 +112,11 @@ internal sealed class AdaptiveSegmentedDownloader
             return SegmentedDownloadResult.NotAttempted;
         }
 
+        // A weak ETag (or no validator) cannot prove that saved byte ranges
+        // still belong to the same representation on a later attempt.
+        if (GetRepresentationValidator(probe) == null)
+            DeleteSegmentArtifacts(outputFile);
+
         Segment[] segments = CreateSegments(
             outputFile,
             stableIdentity,
@@ -150,19 +155,32 @@ internal sealed class AdaptiveSegmentedDownloader
             !File.Exists(segment.Path) || new FileInfo(segment.Path).Length != segment.Length));
         var stopwatch = Stopwatch.StartNew();
         Task[] tasks = Enumerable.Range(0, Math.Min(workerCount, Math.Max(1, pending.Count)))
-            .Select(_ => DownloadWorkerAsync(
-                pending,
-                downloadUri,
-                probe,
-                requestFactory,
-                validateResponse,
-                bytes =>
+            .Select(async _ =>
+            {
+                try
                 {
-                    long total = Interlocked.Add(ref completedBytes, bytes);
-                    progress(total, probe.TotalLength);
-                },
-                manifest,
-                siblingCancellation.Token))
+                    await DownloadWorkerAsync(
+                        pending,
+                        downloadUri,
+                        probe,
+                        requestFactory,
+                        validateResponse,
+                        bytes =>
+                        {
+                            long total = Interlocked.Add(ref completedBytes, bytes);
+                            progress(total, probe.TotalLength);
+                        },
+                        manifest,
+                        siblingCancellation.Token).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Task.WhenAll waits for every worker, so stop siblings here
+                    // as soon as a worker fails, before awaiting the whole group.
+                    siblingCancellation.Cancel();
+                    throw;
+                }
+            })
             .ToArray();
 
         try
@@ -270,7 +288,8 @@ internal sealed class AdaptiveSegmentedDownloader
 
         validateResponse(response);
         ContentRangeHeaderValue? range = response.Content.Headers.ContentRange;
-        if (range?.From != 0 || range.To != 0 || range.Length is not long totalLength || totalLength <= 0)
+        if (range == null || !string.Equals(range.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
+            || range.From != 0 || range.To != 0 || range.Length is not long totalLength || totalLength <= 0)
             throw new RangeDownloadNotSupportedException("Server returned an invalid Content-Range for the range probe.");
         if (response.Content.Headers.ContentLength is long probeLength && probeLength != 1)
             throw new RangeDownloadNotSupportedException("Server returned an invalid range-probe Content-Length.");
@@ -285,7 +304,7 @@ internal sealed class AdaptiveSegmentedDownloader
             totalLength,
             response.Headers.ETag,
             response.Content.Headers.LastModified,
-            RemoteChecksumValidator.Read(response));
+            RemoteChecksumValidator.Read(response, includeContentMd5: false));
     }
 
     private async Task DownloadWorkerAsync(
@@ -355,7 +374,8 @@ internal sealed class AdaptiveSegmentedDownloader
             validateResponse(response);
             EnsureIdentityEncoding(response);
             ContentRangeHeaderValue? range = response.Content.Headers.ContentRange;
-            if (range?.From != nextByte
+            if (range == null || !string.Equals(range.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
+                || range.From != nextByte
                 || range.To is not long responseTo
                 || responseTo < nextByte
                 || responseTo > segment.To
@@ -476,13 +496,13 @@ internal sealed class AdaptiveSegmentedDownloader
     private static void ValidateRepresentation(HttpResponseMessage response, RangeProbe probe)
     {
         EntityTagHeaderValue? responseTag = response.Headers.ETag;
-        if (probe.ETag != null && responseTag != null
+        if (probe.ETag is { IsWeak: false } && responseTag != null
             && !probe.ETag.Tag.Equals(responseTag.Tag, StringComparison.Ordinal))
         {
             throw new InvalidDataException("The remote file changed while its segments were downloading.");
         }
         DateTimeOffset? modified = response.Content.Headers.LastModified;
-        if (probe.ETag == null && probe.LastModified != null && modified != null
+        if (probe.ETag is not { IsWeak: false } && probe.LastModified != null && modified != null
             && probe.LastModified != modified)
         {
             throw new InvalidDataException("The remote file modification date changed during download.");
@@ -495,9 +515,7 @@ internal sealed class AdaptiveSegmentedDownloader
         RangeProbe probe,
         int? requestedCount)
     {
-        string validator = probe.ETag?.Tag
-            ?? probe.LastModified?.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            ?? "none";
+        string validator = GetRepresentationValidator(probe) ?? "none";
         string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{stableIdentity}\n{probe.TotalLength}\n{validator}")))[..16];
         int count = requestedCount
@@ -521,6 +539,11 @@ internal sealed class AdaptiveSegmentedDownloader
         }
         return segments;
     }
+
+    private static string? GetRepresentationValidator(RangeProbe probe) =>
+        probe.ETag is { IsWeak: false } etag
+            ? etag.Tag
+            : probe.LastModified?.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     private static async Task AssembleAsync(
         IReadOnlyList<Segment> segments,
@@ -677,13 +700,13 @@ internal sealed class AdaptiveSegmentedDownloader
                 }
             }
 
-            string validator = probe.ETag?.Tag
-                ?? probe.LastModified?.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                ?? "none";
+            string validator = GetRepresentationValidator(probe) ?? "none";
             if (manifest == null
                 || manifest.TotalLength != probe.TotalLength
-                || !manifest.IdentityHash.Equals(identity, StringComparison.Ordinal)
-                || !manifest.Validator.Equals(validator, StringComparison.Ordinal))
+                || !string.Equals(manifest.IdentityHash, identity, StringComparison.Ordinal)
+                || !string.Equals(manifest.Validator, validator, StringComparison.Ordinal)
+                || manifest.Blocks == null
+                || manifest.Blocks.Any(block => block == null))
             {
                 manifest = new SegmentManifest
                 {

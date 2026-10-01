@@ -81,21 +81,23 @@ public sealed class CloudAccountStore
         lock (_gate)
         {
             List<PersistedAccount> accounts = LoadPersisted();
-            if (makeActive)
+            if (makeActive || profile.IsActive)
             {
                 foreach (PersistedAccount account in accounts.Where(item => item.Provider == profile.Provider))
                     account.IsActive = false;
-                profile.IsActive = true;
             }
 
-            profile.UpdatedUtc = DateTime.UtcNow;
             PersistedAccount persisted = FromProfile(profile);
+            persisted.IsActive = makeActive || profile.IsActive;
+            persisted.UpdatedUtc = DateTime.UtcNow;
             int index = accounts.FindIndex(account => account.Id == profile.Id);
             if (index >= 0)
                 accounts[index] = persisted;
             else
                 accounts.Add(persisted);
             SavePersisted(accounts);
+            profile.IsActive = persisted.IsActive;
+            profile.UpdatedUtc = persisted.UpdatedUtc;
         }
     }
 
@@ -141,8 +143,8 @@ public sealed class CloudAccountStore
         try
         {
             string json = File.ReadAllText(_filePath);
-            return JsonConvert.DeserializeObject<List<PersistedAccount>>(json)
-                ?? new List<PersistedAccount>();
+            return (JsonConvert.DeserializeObject<List<PersistedAccount>>(json)
+                ?? new List<PersistedAccount>()).Where(account => account != null).ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -205,10 +207,10 @@ public sealed class CloudAccountStore
                 Id = profile.Id,
                 Provider = profile.Provider,
                 DisplayName = profile.DisplayName.Trim(),
-                UserName = profile.UserName.Trim(),
-                ServerUrl = profile.ServerUrl.Trim(),
+                UserName = (profile.UserName ?? string.Empty).Trim(),
+                ServerUrl = (profile.ServerUrl ?? string.Empty).Trim(),
                 ProtectedSecret = Convert.ToBase64String(protectedBytes),
-                SecretKind = profile.SecretKind,
+                SecretKind = profile.SecretKind ?? "token",
                 IsActive = profile.IsActive,
                 UpdatedUtc = profile.UpdatedUtc
             };
@@ -224,7 +226,7 @@ public sealed class CloudAccountStore
         string secret = string.Empty;
         try
         {
-            byte[] protectedBytes = Convert.FromBase64String(account.ProtectedSecret);
+            byte[] protectedBytes = Convert.FromBase64String(account.ProtectedSecret ?? string.Empty);
             byte[] clear = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
             try
             {
@@ -244,11 +246,11 @@ public sealed class CloudAccountStore
         {
             Id = account.Id,
             Provider = account.Provider,
-            DisplayName = account.DisplayName,
-            UserName = account.UserName,
-            ServerUrl = account.ServerUrl,
+            DisplayName = account.DisplayName ?? string.Empty,
+            UserName = account.UserName ?? string.Empty,
+            ServerUrl = account.ServerUrl ?? string.Empty,
             Secret = secret,
-            SecretKind = account.SecretKind,
+            SecretKind = account.SecretKind ?? "token",
             IsActive = account.IsActive,
             UpdatedUtc = account.UpdatedUtc
         };

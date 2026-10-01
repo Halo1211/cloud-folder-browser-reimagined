@@ -11,6 +11,8 @@ namespace CloudFolderBrowser
         public string NodeControl2 = "";
         public string NodeControl3 = "";
         public string NodeControl4 = "";
+        public DateTime CreatedTime { get; }
+        public DateTime ModifiedTime { get; }
         long _size;
         const double b2Mb = 1.0 / (1024 * 1024 );
         public ColumnNode LinkedNode;
@@ -27,6 +29,8 @@ namespace CloudFolderBrowser
 
         public ColumnNode(string name, DateTime created, DateTime modified, long size)
         {
+            CreatedTime = created;
+            ModifiedTime = modified;
             NodeControl1 = name;
             NodeControl2 = created.ToShortDateString();
             NodeControl3 = modified.ToShortDateString();
@@ -43,12 +47,17 @@ namespace CloudFolderBrowser
 
         public ColumnNode(ColumnNode node)
         {
+            CreatedTime = node.CreatedTime;
+            ModifiedTime = node.ModifiedTime;
             NodeControl1 = node.NodeControl1;
             NodeControl2 = node.NodeControl2;
             NodeControl3 = node.NodeControl3;
-            NodeControl4 = node.NodeControl4;
+            Size = node.Size;
+            Path = node.Path;
+            CheckBoxEnabled = node.CheckBoxEnabled;
+            CheckState = node.CheckState;
             Text = this.NodeControl1;
-            Tag = node.Tag;            
+            Tag = node.Tag;
         }
     }
 }

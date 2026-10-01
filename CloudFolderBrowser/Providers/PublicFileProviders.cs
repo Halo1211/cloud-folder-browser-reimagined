@@ -31,6 +31,7 @@ public abstract class PublicFileProviderBase : ICloudFolderProvider, ICloudFolde
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? source) || !CanHandle(source))
             throw new ArgumentException($"This is not a supported {DisplayName} link.", nameof(url));
 
@@ -53,7 +54,14 @@ public abstract class PublicFileProviderBase : ICloudFolderProvider, ICloudFolde
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
             response.EnsureSuccessStatusCode();
-            name = GetContentDispositionName(response.Content.Headers.ContentDisposition) ?? name;
+            string responseName = GetContentDispositionName(response.Content.Headers.ContentDisposition) ?? name;
+            bool isHtmlFile = Path.GetExtension(responseName).Equals(".html", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(responseName).Equals(".htm", StringComparison.OrdinalIgnoreCase);
+            if (response.StatusCode != System.Net.HttpStatusCode.OK
+                || (!isHtmlFile && string.Equals(response.Content.Headers.ContentType?.MediaType,
+                    "text/html", StringComparison.OrdinalIgnoreCase)))
+                throw new HttpRequestException("The metadata probe did not return a complete file response.");
+            name = responseName;
             if (response.Content.Headers.ContentLength is long reportedSize)
             {
                 size = Math.Max(0, reportedSize);
@@ -124,10 +132,11 @@ public sealed class DropboxPublicFileProvider : PublicFileProviderBase
         "Dropbox", "Dropbox", new Uri("https://api.dropboxapi.com/2/check/user"));
 
     public override bool CanHandle(Uri uri) =>
-        uri.Host.Equals("dropbox.com", StringComparison.OrdinalIgnoreCase)
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
+        && (uri.Host.Equals("dropbox.com", StringComparison.OrdinalIgnoreCase)
         || uri.Host.EndsWith(".dropbox.com", StringComparison.OrdinalIgnoreCase)
         || uri.Host.Equals("dropboxusercontent.com", StringComparison.OrdinalIgnoreCase)
-        || uri.Host.EndsWith(".dropboxusercontent.com", StringComparison.OrdinalIgnoreCase);
+        || uri.Host.EndsWith(".dropboxusercontent.com", StringComparison.OrdinalIgnoreCase));
 
     public override Uri GetDownloadUri(Uri source)
     {
@@ -164,9 +173,10 @@ public sealed class GoogleDrivePublicFileProvider : PublicFileProviderBase
         "GoogleDrive", "Google Drive", new Uri("https://www.googleapis.com/drive/v3/about"));
 
     public override bool CanHandle(Uri uri) =>
-        uri.Host.Equals("drive.google.com", StringComparison.OrdinalIgnoreCase)
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
+        && (uri.Host.Equals("drive.google.com", StringComparison.OrdinalIgnoreCase)
         || uri.Host.Equals("docs.google.com", StringComparison.OrdinalIgnoreCase)
-        || uri.Host.EndsWith(".googleusercontent.com", StringComparison.OrdinalIgnoreCase);
+        || uri.Host.EndsWith(".googleusercontent.com", StringComparison.OrdinalIgnoreCase));
 
     public override Uri GetDownloadUri(Uri source)
     {

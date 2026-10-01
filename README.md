@@ -3,7 +3,7 @@
   <h1>Cloud Folder Browser Reimagined</h1>
   <p>A Windows desktop application for browsing public cloud folders, comparing them with local storage, and downloading only what is needed.</p>
   <p>
-    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.2-D6A15B" alt="Version 1.0.2"></a>
+    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.3-D6A15B" alt="Version 1.0.3"></a>
     <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml"><img src="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-20201D" alt="GPL-3.0 license"></a>
     <a href="#requirements"><img src="https://img.shields.io/badge/platform-Windows%20x64-20201D" alt="Windows x64"></a>
@@ -15,6 +15,12 @@
 This fork keeps the original Cloud Folder Browser workflow—load a shared folder, inspect its contents, compare it with a local directory, and download missing files—while extending it into a multi-provider sync and transfer tool.
 
 ## What is new in v1.0
+
+Version 1.0.3 improves download integrity, cancellation, credential isolation,
+provider parsing, saved-data recovery, sync preview, and export safety. The
+regression suite now includes 425 tests. See the [changelog](CHANGELOG.md) and
+the [September audit](docs/bug-audit-2026-09-27.md) and
+[October audit](docs/bug-audit-2026-10-01.md) for details and verification limits.
 
 ### Multi-cloud accounts and download routing
 
@@ -111,6 +117,17 @@ Create the same self-contained Windows x64 package used for releases:
 ```
 
 The script clears previous local release outputs, runs the test suite, publishes a single-file executable, creates a ZIP package, and writes SHA-256 checksums under `release/`.
+
+Remove generated build and diagnostic output while retaining release assets:
+
+```powershell
+./tools/Clean-Repository.ps1
+```
+
+Local application settings, credentials, folder caches, transfer artifacts, and
+release binaries are excluded from source control. The version tag triggers the
+GitHub Actions release workflow, which publishes the EXE, portable ZIP, and
+checksums as release assets.
 
 ## Data locations and security notes
 

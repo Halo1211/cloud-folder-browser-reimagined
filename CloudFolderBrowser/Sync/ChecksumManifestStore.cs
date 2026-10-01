@@ -58,9 +58,13 @@ public sealed class ChecksumManifestStore
         try
         {
             await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
-            _entries![Normalize(path)] = entry;
-            await SaveAsync(cancellationToken).ConfigureAwait(false);
-            return entry;
+            var updatedEntries = new Dictionary<string, ChecksumManifestEntry>(_entries!, StringComparer.OrdinalIgnoreCase)
+            {
+                [Normalize(path)] = entry
+            };
+            await SaveAsync(updatedEntries, cancellationToken).ConfigureAwait(false);
+            _entries = updatedEntries;
+            return Clone(entry);
         }
         finally
         {
@@ -114,7 +118,7 @@ public sealed class ChecksumManifestStore
             string json = await File.ReadAllTextAsync(_filePath, cancellationToken).ConfigureAwait(false);
             var values = JsonConvert.DeserializeObject<List<ChecksumManifestEntry>>(json) ?? new();
             _entries = values
-                .Where(value => !string.IsNullOrWhiteSpace(value.Path))
+                .Where(value => value != null && IsUsablePath(value.Path))
                 .GroupBy(value => Normalize(value.Path), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.OrderByDescending(x => x.UpdatedUtc).First(), StringComparer.OrdinalIgnoreCase);
         }
@@ -125,13 +129,13 @@ public sealed class ChecksumManifestStore
         }
     }
 
-    private async Task SaveAsync(CancellationToken cancellationToken)
+    private async Task SaveAsync(Dictionary<string, ChecksumManifestEntry> entries, CancellationToken cancellationToken)
     {
         string? directory = Path.GetDirectoryName(Path.GetFullPath(_filePath));
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
         string temporaryPath = _filePath + ".tmp";
-        string json = JsonConvert.SerializeObject(_entries!.Values.OrderBy(x => x.Path), Formatting.Indented);
+        string json = JsonConvert.SerializeObject(entries.Values.OrderBy(x => x.Path), Formatting.Indented);
         try
         {
             await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
@@ -171,6 +175,21 @@ public sealed class ChecksumManifestStore
         Sha256 = entry.Sha256,
         UpdatedUtc = entry.UpdatedUtc
     };
+
+    private static bool IsUsablePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        try
+        {
+            _ = Normalize(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 
     private static string Normalize(string path)
     {

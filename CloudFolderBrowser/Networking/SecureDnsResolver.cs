@@ -75,6 +75,13 @@ public sealed class SecureDnsResolver : IAppDnsResolver
     private readonly Uri? _dohUri;
     private readonly DnsTlsEndpoint _dotEndpoint;
     private readonly TimeSpan _timeout;
+    private readonly Func<byte[], CancellationToken, Task<byte[]>>? _queryTransport;
+
+    internal SecureDnsResolver(NetworkConfiguration configuration,
+        Func<byte[], CancellationToken, Task<byte[]>> queryTransport) : this(configuration)
+    {
+        _queryTransport = queryTransport;
+    }
 
     public SecureDnsResolver(NetworkConfiguration configuration, TimeSpan? timeout = null)
     {
@@ -103,6 +110,7 @@ public sealed class SecureDnsResolver : IAppDnsResolver
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        cancellationToken.ThrowIfCancellationRequested();
         if (IPAddress.TryParse(host, out IPAddress? literal))
             return new[] { literal };
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
@@ -127,7 +135,10 @@ public sealed class SecureDnsResolver : IAppDnsResolver
         uint ttl = Math.Min(ipv4.Result.Answer.MinimumTtl, ipv6.Result.Answer.MinimumTtl);
         if (ttl == uint.MaxValue)
             ttl = 60;
-        Cache[cacheKey] = new CacheEntry(addresses, DateTime.UtcNow.AddSeconds(Math.Clamp(ttl, 5, 3600)));
+        if (ttl > 0)
+            Cache[cacheKey] = new CacheEntry(addresses, DateTime.UtcNow.AddSeconds(Math.Min(ttl, 3600)));
+        else
+            Cache.TryRemove(cacheKey, out _);
         return Order(addresses, preferIpv6);
     }
 
@@ -143,7 +154,7 @@ public sealed class SecureDnsResolver : IAppDnsResolver
         {
             throw;
         }
-        catch (Exception ex) when (ex is TimeoutException or SocketException or InvalidDataException
+        catch (Exception ex) when (ex is TimeoutException or SocketException or IOException
             or HttpRequestException or AuthenticationException)
         {
             return new QueryOutcome(new CustomDnsResolver.DnsAnswer(Array.Empty<IPAddress>(), uint.MaxValue));
@@ -157,10 +168,12 @@ public sealed class SecureDnsResolver : IAppDnsResolver
     {
         ushort id = (ushort)RandomNumberGenerator.GetInt32(ushort.MaxValue + 1);
         byte[] query = CustomDnsResolver.BuildQuery(id, host, type);
-        byte[] response = _transport == DnsTransport.Https
+        byte[] response = _queryTransport != null
+            ? await _queryTransport(query, cancellationToken).ConfigureAwait(false)
+            : _transport == DnsTransport.Https
             ? await QueryDohAsync(query, cancellationToken).ConfigureAwait(false)
             : await QueryDotAsync(query, cancellationToken).ConfigureAwait(false);
-        return CustomDnsResolver.ParseResponse(response, id, type);
+        return CustomDnsResolver.ParseResponse(response, id, type, host);
     }
 
     private async Task<byte[]> QueryDohAsync(byte[] query, CancellationToken cancellationToken)

@@ -182,9 +182,10 @@ namespace CloudFolderBrowser
             newFiles_model = new TreeModel();
             newFilesFlat_model = new TreeModel();
 
-            ColumnNode rootFlatNode = new ColumnNode(newFilesFolder.Name, newFilesFolder.Created, newFilesFolder.Modified, newFilesFolder.Size);
+            long selectedBytes = newFilesFolder.Files.Sum(file => file.Size);
+            ColumnNode rootFlatNode = new ColumnNode(newFilesFolder.Name, newFilesFolder.Created, newFilesFolder.Modified, selectedBytes);
             newFilesFlat_model.Nodes.Add(rootFlatNode);
-            ColumnNode rootNode = new ColumnNode(newFilesFolder.Name, newFilesFolder.Created, newFilesFolder.Modified, newFilesFolder.Size);
+            ColumnNode rootNode = new ColumnNode(newFilesFolder.Name, newFilesFolder.Created, newFilesFolder.Modified, selectedBytes);
             rootNode.Tag = rootFlatNode.Tag = Model.CloudPublicFolder;
 
             newFilesTreeViewAdv.Model = new SortedTreeModel(newFiles_model);
@@ -204,7 +205,8 @@ namespace CloudFolderBrowser
                     ColumnNode subNode = new ColumnNode(file.Name, file.Created, file.Modified, file.Size);
                     subNode.Tag = file;
                     rootNode.Nodes.Add(subNode);
-                    rootNode.Size += subNode.Size;
+                    ffileNode.LinkedNode = subNode;
+                    subNode.LinkedNode = ffileNode;
                 }
                 else
                 {
@@ -302,7 +304,7 @@ namespace CloudFolderBrowser
 
             foreach (Node subnode in node.Nodes)
             {
-                if (subnode.Tag is CloudFolder folder)
+                if (subnode.Tag is not CloudFile)
                 {
                     if (subnode.CheckState == CheckState.Indeterminate)
                     {
@@ -310,7 +312,8 @@ namespace CloudFolderBrowser
                     }
                     if (subnode.CheckState == CheckState.Checked)
                     {
-                        checkedFolders.Add(folder);
+                        if (subnode.Tag is CloudFolder folder)
+                            checkedFolders.Add(folder);
                         AddAllFiles(subnode);
                     }
                     continue;
@@ -343,56 +346,21 @@ namespace CloudFolderBrowser
 
         void CreateJdLinkcontainer()
         {
-            var appPath = Directory.GetCurrentDirectory();
-
-            DirectoryInfo di = new DirectoryInfo($"{appPath}\\Links");
-
             if (checkedFiles.Count == 0)
             {
                 MessageBox.Show("No files checked!");
                 return;
             }
-            if (!di.Exists)
-                di.Create();
-            else
-            {
-                foreach (FileInfo file in di.EnumerateFiles())
-                    file.Delete();
-                foreach (DirectoryInfo dir in di.EnumerateDirectories())
-                    dir.Delete(true);
-            }
+            DialogResult dialogResult = MessageBox.Show("Export links for " + checkedFiles.Count + " files?", "Result", MessageBoxButtons.YesNo);
+            if (dialogResult == DialogResult.No)
+                return;
 
-            List<JDPackage> packages = new List<JDPackage>();
-
-            if (cloudServiceType == CloudServiceType.Mega && megaApiClient == null)
+            JDLink ResolveLink(CloudFile file)
             {
-                megaApiClient = NetworkClientAdapters.CreateMegaClient();
-                megaApiClient.LoginAnonymous();
-            }
-
-            foreach (CloudFile file in checkedFiles)
-            {
-                //string folderPath = file.Path.Replace(file.Name, "");
-                string folderPath = Path.GetDirectoryName(file.Path) ?? string.Empty;
-                JDPackage pak;
-                if (!packages.ConvertAll(x => x.name).Contains(folderPath))
-                {
-                    pak = new JDPackage(folderPath, folderPath);
-                    pak.numberId = packages.Count.ToString("D3");
-                    pak.downloadFolder = folderPath;
-                    packages.Add(pak);
-                    File.WriteAllText($"{di.FullName}\\{pak.numberId}", JsonConvert.SerializeObject(pak));
-                }
-                else
-                {
-                    pak = packages.Find(x => x.name == folderPath)
-                        ?? throw new InvalidDataException($"Unable to create a package for {file.Path}.");
-                }
                 JDLink link;
                 switch (cloudServiceType)
                 {
                     case CloudServiceType.Mega:
-                        //string downloadLink = ""; //megaApiClient.GetDownloadLink(file.MegaNode).ToString();
                         link = new JDLink(file.Name, file.PublicUrl?.OriginalString
                             ?? throw new InvalidDataException($"MEGA link is missing for {file.Name}."));
                         break;
@@ -402,35 +370,31 @@ namespace CloudFolderBrowser
                         link = new JDLink(file.Name, downloadLink);
                         break;
                     default:
-                        link = new JDLink(file.Name, System.Web.HttpUtility.UrlDecode(
-                            file.PublicUrl?.AbsoluteUri
-                            ?? throw new InvalidDataException($"Download link is missing for {file.Name}.")));
-                        //link = new JDLink(file.Name, file.PublicUrl.AbsoluteUri.Replace("#", "%23").Replace(",", "%2C").Replace("?", "%3F"));                        
+                        link = CreateJdExportLink(file);
                         break;
                 }
-                link.downloadLink.size = file.Size;
-                File.WriteAllText($"{di.FullName}\\{pak.numberId}_{pak.linksCount.ToString("D3")}", JsonConvert.SerializeObject(link));
-                pak.linksCount++;
+                link.downloadLink.size = file.HasKnownSize ? file.Size : -1;
+                return link;
             }
+            try
+            {
+                string archive = JDownloaderExport.CreateArchive(checkedFiles, rootFolder.Name,
+                    Directory.GetCurrentDirectory(), ResolveLink);
+                new DownloadsFinishedForm(Path.GetDirectoryName(archive)!, Path.GetFileName(archive) + " created!").Show();
+            }
+            catch (System.Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or HttpRequestException or ArgumentException or Newtonsoft.Json.JsonException)
+            {
+                MessageBox.Show("Unable to export links: " + ex.Message, "Export links", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
 
-            DialogResult dialogResult = MessageBox.Show("Got links for " + (checkedFiles.Count) + " files! Continue?", "Result", MessageBoxButtons.YesNo);
-            if (dialogResult == DialogResult.No)
-                return;
-
-            Random rnd = new Random();
-            int number = rnd.Next(1, 9999);
-
-            string rootFolderName = rootFolder.Name;
-            foreach (char c in Path.GetInvalidFileNameChars())
-                rootFolderName = rootFolderName.Replace(c.ToString(), "");
-
-            string dirPath = $"{appPath}\\linkcontainers\\{rootFolderName}";
-
-            Directory.CreateDirectory(dirPath);
-            System.IO.Compression.ZipFile.CreateFromDirectory($"{appPath}\\Links", dirPath + @"\linkcollector" + number + ".zip");
-
-            DownloadsFinishedForm downloadsFinishedForm = new DownloadsFinishedForm(dirPath, @"linkcollector" + number + ".zip created!");
-            downloadsFinishedForm.Show();
+        internal static JDLink CreateJdExportLink(CloudFile file)
+        {
+            var link = new JDLink(file.Name, file.PublicUrl?.AbsoluteUri
+                ?? throw new InvalidDataException($"Download link is missing for {file.Name}."));
+            link.downloadLink.size = file.HasKnownSize ? file.Size : -1;
+            return link;
         }
 
         async Task AddCheckedFilesToYadiskAsync()
@@ -731,11 +695,8 @@ namespace CloudFolderBrowser
                 megaApiClient = NetworkClientAdapters.CreateMegaClient();
                 if (Properties.Settings.Default.loginedMega && Properties.Settings.Default.loginTokenMega != "")
                 {
-                    var megaLoginToken = JsonConvert.DeserializeObject<MegaApiClient.LogonSessionToken>(
-                        Properties.Settings.Default.loginTokenMega, new JsonSerializerSettings()
-                        {
-                            TypeNameHandling = TypeNameHandling.Auto
-                        });
+                    var megaLoginToken = Networking.MegaSessionTokenCodec.Deserialize(
+                        Properties.Settings.Default.loginTokenMega);
                     try
                     {
                         await megaApiClient.LoginAsync(megaLoginToken);

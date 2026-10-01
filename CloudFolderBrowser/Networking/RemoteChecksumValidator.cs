@@ -18,18 +18,23 @@ internal static class RemoteChecksumValidator
         HttpResponseMessage response,
         bool includeContentMd5 = true)
     {
-        if (TryReadDigest(response.Headers, out RemoteChecksum? digest)
-            || TryReadDigest(response.Content.Headers, out digest))
+        TryReadDigest(response.Headers, out RemoteChecksum? digest);
+        TryReadDigest(response.Content.Headers, out RemoteChecksum? contentDigest);
+        if (digest?.Algorithm == "SHA256")
             return digest;
+        if (contentDigest?.Algorithm == "SHA256")
+            return contentDigest;
+        if (digest != null || contentDigest != null)
+            return digest ?? contentDigest;
         if (TryReadGoogleHash(response.Headers, out RemoteChecksum? google)
             || TryReadGoogleHash(response.Content.Headers, out google))
             return google;
         if (!includeContentMd5)
             return null;
-        if (response.Content.Headers.ContentMD5 is { Length: > 0 } md5)
+        if (response.Content.Headers.ContentMD5 is { Length: 16 } md5)
             return new RemoteChecksum("MD5", md5);
-        if (TryReadBase64Header(response.Content.Headers, "Content-MD5", out byte[]? contentMd5)
-            || TryReadBase64Header(response.Headers, "Content-MD5", out contentMd5))
+        if (TryReadBase64Header(response.Content.Headers, "Content-MD5", 16, out byte[]? contentMd5)
+            || TryReadBase64Header(response.Headers, "Content-MD5", 16, out contentMd5))
         {
             return new RemoteChecksum("MD5", contentMd5);
         }
@@ -81,15 +86,19 @@ internal static class RemoteChecksumValidator
             string algorithm = pair[0].Trim().ToLowerInvariant();
             if (algorithm is not ("sha-256" or "sha256" or "md5"))
                 continue;
-            if (TryDecode(pair[1].Trim().Trim(':'), out byte[]? expected))
+            bool isSha256 = algorithm.StartsWith("sha", StringComparison.Ordinal);
+            if (TryDecode(pair[1].Trim().Trim(':'), out byte[]? expected)
+                && expected.Length == (isSha256 ? 32 : 16))
             {
-                checksum = new RemoteChecksum(
-                    algorithm.StartsWith("sha", StringComparison.Ordinal) ? "SHA256" : "MD5",
-                    expected);
-                return true;
+                if (isSha256)
+                {
+                    checksum = new RemoteChecksum("SHA256", expected);
+                    return true;
+                }
+                checksum ??= new RemoteChecksum("MD5", expected);
             }
         }
-        return false;
+        return checksum != null;
     }
 
     private static bool TryReadGoogleHash(HttpHeaders headers, out RemoteChecksum? checksum)
@@ -102,7 +111,8 @@ internal static class RemoteChecksumValidator
             string[] pair = part.Trim().Split('=', 2);
             if (pair.Length == 2
                 && pair[0].Equals("md5", StringComparison.OrdinalIgnoreCase)
-                && TryDecode(pair[1], out byte[]? expected))
+                && TryDecode(pair[1], out byte[]? expected)
+                && expected.Length == 16)
             {
                 checksum = new RemoteChecksum("MD5", expected);
                 return true;
@@ -128,10 +138,12 @@ internal static class RemoteChecksumValidator
     private static bool TryReadBase64Header(
         HttpHeaders headers,
         string name,
+        int expectedLength,
         out byte[] bytes)
     {
         bytes = Array.Empty<byte>();
         return headers.TryGetValues(name, out IEnumerable<string>? values)
-            && TryDecode(values.FirstOrDefault() ?? string.Empty, out bytes);
+            && TryDecode(values.FirstOrDefault() ?? string.Empty, out bytes)
+            && bytes.Length == expectedLength;
     }
 }

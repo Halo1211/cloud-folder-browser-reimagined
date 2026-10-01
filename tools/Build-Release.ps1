@@ -24,6 +24,13 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
     throw "The project version '$version' is not a three-part semantic version."
 }
 
+$changelog = Get-Content -LiteralPath (Join-Path $repositoryRoot 'CHANGELOG.md') -Raw
+$notesPattern = '(?ms)^## \[' + [regex]::Escape($version) + '\][^\r\n]*\r?\n(?<notes>.*?)(?=^## \[|\z)'
+$releaseNotes = [regex]::Match($changelog, $notesPattern)
+if (-not $releaseNotes.Success) {
+    throw "CHANGELOG.md does not contain release notes for version $version."
+}
+
 [System.IO.Directory]::CreateDirectory($releaseDirectory) | Out-Null
 Get-ChildItem -LiteralPath $releaseDirectory -Force |
     Where-Object Name -ne 'README.md' |
@@ -91,11 +98,17 @@ $archivePath = Join-Path $releaseDirectory $archiveName
 Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
 
 $checksumFiles = @($releaseExecutable, $archivePath)
+if (Test-Path -LiteralPath $publishedConfiguration) {
+    $checksumFiles += Join-Path $releaseDirectory 'CloudFolderBrowser.dll.config'
+}
 $checksumLines = foreach ($file in $checksumFiles) {
     $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([System.IO.Path]::GetFileName($file))"
 }
 [System.IO.File]::WriteAllLines((Join-Path $releaseDirectory 'SHA256SUMS.txt'), $checksumLines)
+[System.IO.File]::WriteAllText(
+    (Join-Path $releaseDirectory 'RELEASE_NOTES.md'),
+    $releaseNotes.Groups['notes'].Value.Trim() + [Environment]::NewLine)
 
 Write-Host "Release v$version created in $releaseDirectory"
 Get-ChildItem -LiteralPath $releaseDirectory -File | Select-Object Name, Length

@@ -91,15 +91,7 @@ namespace CloudFolderBrowser
                     MessageBoxIcon.Information);
             }
 
-            foreach (var group in entries
-                .Where(entry => entry.CloudService != CloudServiceType.Mega)
-                .GroupBy(entry => new
-                {
-                    entry.CloudService,
-                    RequestedRouteId = string.IsNullOrWhiteSpace(entry.RequestedRouteId)
-                        ? DownloadRouteIds.Automatic
-                        : entry.RequestedRouteId
-                }))
+            foreach (var group in GroupRetryEntries(GetRetryableEntries(entries)))
             {
                 DownloadHistoryEntry first = group.First();
                 string basePath = Path.GetDirectoryName(first.SavePath) ?? syncFolderPath;
@@ -121,16 +113,9 @@ namespace CloudFolderBrowser
 
                 foreach (DownloadHistoryEntry entry in group)
                 {
-                    if (!Uri.TryCreate(entry.SourceUrl, UriKind.Absolute, out Uri? sourceUri))
+                    CloudFile? file = entry.ToRetryFile();
+                    if (file == null)
                         continue;
-                    var file = new CloudFile(entry.FileName, DateTime.MinValue, DateTime.MinValue, entry.ExpectedSize)
-                    {
-                        Path = entry.CloudPath,
-                        PublicUrl = sourceUri,
-                        LocalSavePathOverride = entry.SavePath,
-                        DownloadHistoryId = entry.Id,
-                        PlannedAction = SyncPlanAction.Download
-                    };
                     root.AddFile(file);
                     root.SizeTopDirectoryOnly += file.Size;
                 }
@@ -145,8 +130,8 @@ namespace CloudFolderBrowser
                     string? shareKey = ExtractShareKey(first.SourceUrl);
                     if (!string.IsNullOrWhiteSpace(shareKey))
                     {
-                        Model.savedPasswords.TryGetValue(shareKey, out string? savedPassword);
-                        resumeModel.WebdavCredential = new NetworkCredential(shareKey, savedPassword ?? string.Empty);
+                        string savedPassword = Model.GetSavedSharePassword(new Uri(first.SourceUrl), shareKey);
+                        resumeModel.WebdavCredential = new NetworkCredential(shareKey, savedPassword);
                     }
                 }
 
@@ -154,6 +139,28 @@ namespace CloudFolderBrowser
                 activeSyncForm = syncForm;
                 activeSyncForm.DownloadCompleted += SyncForm_DownloadCompleted;
             }
+        }
+
+        internal static IEnumerable<IGrouping<(CloudServiceType CloudService, string RequestedRouteId, string CredentialScope), DownloadHistoryEntry>>
+            GroupRetryEntries(IEnumerable<DownloadHistoryEntry> entries) => entries
+                .Where(entry => entry.CloudService != CloudServiceType.Mega)
+                .GroupBy(entry => (entry.CloudService,
+                    string.IsNullOrWhiteSpace(entry.RequestedRouteId) ? DownloadRouteIds.Automatic : entry.RequestedRouteId,
+                    GetRetryCredentialScope(entry)));
+
+        internal static IEnumerable<DownloadHistoryEntry> GetRetryableEntries(
+            IEnumerable<DownloadHistoryEntry> entries) => entries
+                .Where(entry => entry.CloudService != CloudServiceType.Mega && entry.ToRetryFile() != null);
+
+        private static string GetRetryCredentialScope(DownloadHistoryEntry entry)
+        {
+            if (entry.CloudService is not (CloudServiceType.Allsync or CloudServiceType.QCloud))
+                return string.Empty;
+            if (!Uri.TryCreate(entry.SourceUrl, UriKind.Absolute, out Uri? source))
+                return entry.Id.ToString("D");
+            string? shareKey = ExtractShareKey(entry.SourceUrl);
+            return source.GetLeftPart(UriPartial.Authority).ToLowerInvariant() + "\n"
+                + (shareKey ?? entry.Id.ToString("D"));
         }
 
         private static string? ExtractShareKey(string url)
@@ -172,7 +179,7 @@ namespace CloudFolderBrowser
         private static string GetApplicationVersion()
         {
             Version? version = typeof(MainForm).Assembly.GetName().Version;
-            return version == null ? "1.0.2" : $"{version.Major}.{version.Minor}.{version.Build}";
+            return version == null ? "1.0.3" : $"{version.Major}.{version.Minor}.{version.Build}";
         }
 
         public bool UseProgressPanel = false;
@@ -309,9 +316,20 @@ namespace CloudFolderBrowser
 
             if (Properties.Settings.Default.savedPasswordsJson != "")
             {
-                Model.savedPasswords = DeserializeDictionarySetting(
-                    Properties.Settings.Default.savedPasswordsJson,
-                    "saved share credentials");
+                try
+                {
+                    Model.savedPasswords = ShareCredentialCacheCodec.Deserialize(Properties.Settings.Default.savedPasswordsJson);
+                    if (!isUiSnapshot && !ShareCredentialCacheCodec.IsProtected(Properties.Settings.Default.savedPasswordsJson))
+                    {
+                        Properties.Settings.Default.savedPasswordsJson = ShareCredentialCacheCodec.Serialize(Model.savedPasswords);
+                        Properties.Settings.Default.Save();
+                    }
+                }
+                catch (Exception ex) when (ex is JsonException or CryptographicException or FormatException
+                    or IOException or UnauthorizedAccessException or System.Configuration.ConfigurationErrorsException)
+                {
+                    Model.WriteToLog($"Unable to read saved share credentials ({ex.GetType().Name}).", true);
+                }
             }
 
             checkAllToolStripMenuItem.Click += CheckAllToolStripMenuItem_Click;
@@ -365,9 +383,7 @@ namespace CloudFolderBrowser
             Shown -= RestoreMegaSessionOnShown;
             try
             {
-                var token = JsonConvert.DeserializeObject<MegaApiClient.LogonSessionToken>(
-                    Properties.Settings.Default.loginTokenMega,
-                    new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto });
+                var token = Networking.MegaSessionTokenCodec.Deserialize(Properties.Settings.Default.loginTokenMega);
                 if (token == null)
                     throw new JsonException("The stored MEGA token is empty.");
                 await LoginMega(token);
@@ -1206,8 +1222,6 @@ namespace CloudFolderBrowser
                 if (key == "")
                     checkStatus = false;
 
-                Model.CloudPublicFolder = new CloudFolder();
-
                 var dir = new DirectoryInfo(Path.Combine(appPath, "jsons"));
                 dir.Create();
 
@@ -1225,19 +1239,7 @@ namespace CloudFolderBrowser
                     return;
                 }
 
-                CloudFolder loadedFolder = await Task.Run(() =>
-                {
-                    string jsonString = File.ReadAllText(fileName);
-                    return JsonConvert.DeserializeObject<CloudFolder>(jsonString, new JsonSerializerSettings
-                    {
-                        TypeNameHandling = TypeNameHandling.Auto
-                    }) ?? throw new JsonException("The saved folder list is empty.");
-                });
-
-                Model.CloudPublicFolder = loadedFolder;
-                Model.AllFolders = new List<CloudFolder>();
-                AddSubFolders(Model.CloudPublicFolder);
-                Model.LoadedFromFile = true;
+                await Model.LoadSavedFolderCacheAsync(fileName);
                 UpdateTreeModel();
 
                 bool providerAvailable = true;

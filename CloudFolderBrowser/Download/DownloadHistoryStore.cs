@@ -24,6 +24,8 @@ public sealed class DownloadHistoryEntry
     public string SourceUrl { get; set; } = string.Empty;
     public string SavePath { get; set; } = string.Empty;
     public long ExpectedSize { get; set; }
+    public bool HasKnownSize { get; set; } = true;
+    public bool RequiresLinkResolver { get; set; }
     public long BytesOnDisk { get; set; }
     public DownloadJobStatus Status { get; set; }
     public string Error { get; set; } = string.Empty;
@@ -32,6 +34,38 @@ public sealed class DownloadHistoryEntry
     public string EffectiveRouteId { get; set; } = string.Empty;
     public string EffectiveRouteName { get; set; } = string.Empty;
     public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
+
+    internal CloudFile? ToRetryFile()
+    {
+        if (!Uri.TryCreate(SourceUrl, UriKind.Absolute, out Uri? uri)
+            || uri.Scheme is not ("http" or "https")
+            || ExpectedSize < 0
+            || string.IsNullOrWhiteSpace(SavePath))
+            return null;
+        try
+        {
+            if (!Path.IsPathFullyQualified(SavePath)
+                || string.IsNullOrWhiteSpace(Path.GetDirectoryName(Path.GetFullPath(SavePath))))
+                return null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+        string name = string.IsNullOrWhiteSpace(FileName) ? Path.GetFileName(SavePath) : FileName;
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        return new CloudFile(name, DateTime.MinValue, DateTime.MinValue, ExpectedSize)
+        {
+            Path = CloudPath,
+            PublicUrl = uri,
+            HasKnownSize = HasKnownSize,
+            RequiresLinkResolver = RequiresLinkResolver,
+            LocalSavePathOverride = SavePath,
+            DownloadHistoryId = Id,
+            PlannedAction = Sync.SyncPlanAction.Download
+        };
+    }
 }
 
 public sealed class DownloadHistoryStore
@@ -79,16 +113,23 @@ public sealed class DownloadHistoryStore
         try
         {
             await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+            var updatedEntries = _entries!.Select(Clone).ToList();
+            var updatedTimes = new List<(DownloadHistoryEntry Entry, DateTime Time)>();
             foreach (DownloadHistoryEntry entry in entries)
             {
-                int index = _entries!.FindIndex(existing => existing.Id == entry.Id);
-                entry.UpdatedUtc = DateTime.UtcNow;
+                int index = updatedEntries.FindIndex(existing => existing.Id == entry.Id);
+                DownloadHistoryEntry updated = Clone(entry);
+                updated.UpdatedUtc = DateTime.UtcNow;
+                updatedTimes.Add((entry, updated.UpdatedUtc));
                 if (index >= 0)
-                    _entries[index] = Clone(entry);
+                    updatedEntries[index] = updated;
                 else
-                    _entries.Add(Clone(entry));
+                    updatedEntries.Add(updated);
             }
-            await SaveAsync(cancellationToken).ConfigureAwait(false);
+            await SaveAsync(updatedEntries, cancellationToken).ConfigureAwait(false);
+            _entries = updatedEntries;
+            foreach (var (entry, time) in updatedTimes)
+                entry.UpdatedUtc = time;
         }
         finally
         {
@@ -102,8 +143,9 @@ public sealed class DownloadHistoryStore
         try
         {
             await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
-            _entries!.RemoveAll(entry => entry.Status is DownloadJobStatus.Completed or DownloadJobStatus.Skipped);
-            await SaveAsync(cancellationToken).ConfigureAwait(false);
+            var retained = _entries!.Where(entry => entry.Status is not (DownloadJobStatus.Completed or DownloadJobStatus.Skipped)).ToList();
+            await SaveAsync(retained, cancellationToken).ConfigureAwait(false);
+            _entries = retained;
         }
         finally
         {
@@ -127,7 +169,7 @@ public sealed class DownloadHistoryStore
             string json = await File.ReadAllTextAsync(_filePath, cancellationToken).ConfigureAwait(false);
             List<PersistedHistoryEntry> persisted =
                 JsonConvert.DeserializeObject<List<PersistedHistoryEntry>>(json) ?? new();
-            _entries = persisted.Select(ToEntry).ToList();
+            _entries = persisted.Where(entry => entry != null).Select(ToEntry).ToList();
         }
         catch (JsonException)
         {
@@ -139,14 +181,14 @@ public sealed class DownloadHistoryStore
             entry.Status = DownloadJobStatus.Paused;
     }
 
-    private async Task SaveAsync(CancellationToken cancellationToken)
+    private async Task SaveAsync(IEnumerable<DownloadHistoryEntry> entries, CancellationToken cancellationToken)
     {
         string? directory = Path.GetDirectoryName(Path.GetFullPath(_filePath));
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
         string temporaryPath = _filePath + ".tmp";
         string json = JsonConvert.SerializeObject(
-            _entries!.Select(FromEntry).ToArray(),
+            entries.Select(FromEntry).ToArray(),
             Formatting.Indented);
         try
         {
@@ -189,6 +231,8 @@ public sealed class DownloadHistoryStore
         SourceUrl = entry.SourceUrl,
         SavePath = entry.SavePath,
         ExpectedSize = entry.ExpectedSize,
+        HasKnownSize = entry.HasKnownSize,
+        RequiresLinkResolver = entry.RequiresLinkResolver,
         BytesOnDisk = entry.BytesOnDisk,
         Status = entry.Status,
         Error = entry.Error,
@@ -214,6 +258,8 @@ public sealed class DownloadHistoryStore
                 ProtectedSourceUrl = Convert.ToBase64String(protectedBytes),
                 SavePath = entry.SavePath,
                 ExpectedSize = entry.ExpectedSize,
+                HasKnownSize = entry.HasKnownSize,
+                RequiresLinkResolver = entry.RequiresLinkResolver,
                 BytesOnDisk = entry.BytesOnDisk,
                 Status = entry.Status,
                 Error = entry.Error,
@@ -263,6 +309,11 @@ public sealed class DownloadHistoryStore
             SourceUrl = sourceUrl,
             SavePath = persisted.SavePath,
             ExpectedSize = persisted.ExpectedSize,
+            // Older histories did not distinguish an unknown size from zero bytes.
+            HasKnownSize = persisted.HasKnownSize ?? (persisted.ExpectedSize > 0
+                || persisted.Status is DownloadJobStatus.Completed or DownloadJobStatus.Skipped),
+            RequiresLinkResolver = persisted.RequiresLinkResolver
+                ?? persisted.CloudService == CloudServiceType.TeraBox,
             BytesOnDisk = persisted.BytesOnDisk,
             Status = persisted.Status,
             Error = persisted.Error,
@@ -290,6 +341,8 @@ public sealed class DownloadHistoryStore
 
         public string SavePath { get; set; } = string.Empty;
         public long ExpectedSize { get; set; }
+        public bool? HasKnownSize { get; set; }
+        public bool? RequiresLinkResolver { get; set; }
         public long BytesOnDisk { get; set; }
         public DownloadJobStatus Status { get; set; }
         public string Error { get; set; } = string.Empty;

@@ -66,9 +66,7 @@ public sealed class MegaPublicFolderProvider : ICloudFolderProviderV2
             try
             {
                 MegaApiClient.LogonSessionToken? token =
-                    JsonConvert.DeserializeObject<MegaApiClient.LogonSessionToken>(
-                        serializedToken,
-                        new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto });
+                    MegaSessionTokenCodec.Deserialize(serializedToken);
                 if (token != null)
                 {
                     await client.LoginAsync(token).ConfigureAwait(false);

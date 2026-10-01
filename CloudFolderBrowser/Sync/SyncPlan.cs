@@ -67,4 +67,16 @@ public sealed class SyncPlanItem
             : File.Path;
         return path.Replace('\\', '/');
     }
+
+    public string GetTargetLocalPath() => GetTargetLocalPath(Action, TargetName);
+
+    internal string GetTargetLocalPath(SyncPlanAction action, string targetName)
+    {
+        string directory = System.IO.Path.GetDirectoryName(ExistingPath)
+            ?? throw new InvalidOperationException("The sync target has no parent directory.");
+        return action == SyncPlanAction.Rename
+            ? System.IO.Path.Combine(directory,
+                Utility.GetSafePathName(Uri.UnescapeDataString(Utility.GetSafePathName(targetName))))
+            : ExistingPath;
+    }
 }

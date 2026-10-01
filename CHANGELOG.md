@@ -2,6 +2,48 @@
 
 All notable changes to Cloud Folder Browser Reimagined are documented here.
 
+## [1.0.3] - 2026-10-01
+
+### Fixed
+
+- Preserve existing files during failed overwrites and validate HTTP resume,
+  byte ranges, remote checksums, and content encoding before completion.
+- Prevent unsafe reuse of saved segments without a remote version validator,
+  cancel sibling workers promptly, and reject transfer target/artifact collisions.
+- Keep queued jobs and completed files consistent through pause, retry, and
+  cancellation, including cancellation after optional post-processing starts.
+- Restrict source credentials to their origin and apply cookie domain, path,
+  and Secure rules through redirects and refreshed browser sessions.
+- Correct WebDAV parsing, requested subfolder paths, Unicode authentication,
+  AllSync/Qloud decoding, FogLink trees, and unknown-size metadata.
+- Correct sync preview rename/reset behavior, selection preservation, sorting,
+  and size totals; maintain one active account per provider.
+- Make history, checksum, account, and folder-cache writes atomic and retain
+  usable state when writes or saved-data loading fail.
+- Validate saved folder types, MEGA sessions, retry entries, DNS responses,
+  cache TTLs, network settings, and encrypted backup contents.
+- Protect ZIP extraction from unsafe Windows paths and junctions, stop external
+  processes on cancellation, and select matching PAR2 recovery files.
+- Preserve JDownloader URL encoding and user data during export failures.
+
+### Changed
+
+- Encrypt and scope saved share passwords while keeping encrypted backups
+  portable across Windows users.
+- Expand the automated regression suite from 150 to 425 tests.
+- Publish English audit documentation and exclude local/generated data from
+  GitHub source archives.
+
+### Verification
+
+- Release solution build: zero warnings and zero errors.
+- Full regression suite: 425 passing tests, zero failures, and zero skipped tests.
+- NuGet advisory check: no vulnerable packages reported.
+- UI snapshots inspected for the main window, sync preview, and download history.
+
+Live OAuth/cloud providers and optional external tools were not all tested
+end-to-end. See the audit reports for the full verification scope and limits.
+
 ## [1.0.2] - 2026-09-23
 
 ### Fixed

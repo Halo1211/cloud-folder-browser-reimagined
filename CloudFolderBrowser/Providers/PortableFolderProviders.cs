@@ -166,7 +166,7 @@ public sealed class H5AiIndexProvider : ICloudFolderProviderV2
             Path = "/",
             OriginalString = source.AbsoluteUri
         };
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         await LoadPageAsync(client, source, source, root, visited, cancellationToken)
             .ConfigureAwait(false);
         root.CalculateFolderSize();
@@ -203,7 +203,8 @@ public sealed class H5AiIndexProvider : ICloudFolderProviderV2
             if (linkNode == null || string.IsNullOrWhiteSpace(href) || href is "../" or "./")
                 continue;
 
-            Uri itemUri = new(pageUri, href);
+            if (!Uri.TryCreate(pageUri, href, out Uri? itemUri))
+                continue;
             if (!WebIndexProviderUtilities.IsWithinRoot(rootUri, itemUri))
                 continue;
 
@@ -280,7 +281,7 @@ public sealed class TheTroveIndexProvider : ICloudFolderProviderV2
             Path = "/",
             OriginalString = source.AbsoluteUri
         };
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         await LoadPageAsync(client, rootUri, rootUri, root, visited, cancellationToken)
             .ConfigureAwait(false);
         root.CalculateFolderSize();
@@ -315,7 +316,8 @@ public sealed class TheTroveIndexProvider : ICloudFolderProviderV2
                 continue;
             }
 
-            Uri itemUri = new(pageUri, href);
+            if (!Uri.TryCreate(pageUri, href, out Uri? itemUri))
+                continue;
             if (!WebIndexProviderUtilities.IsWithinRoot(rootUri, itemUri))
                 continue;
             string name = WebIndexProviderUtilities.GetLinkName(link, itemUri);
@@ -404,11 +406,29 @@ internal static class WebIndexProviderUtilities
             return false;
         }
 
-        string rootPath = Uri.UnescapeDataString(rootUri.AbsolutePath);
+        if (!TryGetUnambiguousPath(rootUri, out string rootPath)
+            || !TryGetUnambiguousPath(itemUri, out string itemPath))
+            return false;
         if (!rootPath.EndsWith("/", StringComparison.Ordinal))
             rootPath += "/";
-        string itemPath = Uri.UnescapeDataString(itemUri.AbsolutePath);
-        return itemPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
+        return itemPath.StartsWith(rootPath, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetUnambiguousPath(Uri uri, out string path)
+    {
+        path = uri.AbsolutePath;
+        for (int pass = 0; pass < 8; pass++)
+        {
+            string decoded = Uri.UnescapeDataString(path);
+            if (decoded.Contains('\\')
+                || decoded.Count(character => character == '/') != path.Count(character => character == '/')
+                || decoded.Split('/').Any(segment => segment is "." or ".."))
+                return false;
+            if (decoded == path)
+                return true;
+            path = decoded;
+        }
+        return false;
     }
 
     public static string GetFolderName(Uri uri, string fallback)
@@ -444,7 +464,7 @@ internal static class WebIndexProviderUtilities
         if (parts.Length == 0
             || !double.TryParse(parts[0], NumberStyles.Float | NumberStyles.AllowThousands,
                 CultureInfo.InvariantCulture, out double value)
-            || value < 0)
+            || !double.IsFinite(value) || value < 0)
         {
             return -1;
         }
@@ -460,8 +480,10 @@ internal static class WebIndexProviderUtilities
             "MB" => 1000L * 1000L,
             "GB" => 1000L * 1000L * 1000L,
             "TB" => 1000L * 1000L * 1000L * 1000L,
-            _ => 1L
+            _ => -1L
         };
+        if (multiplier < 0)
+            return -1;
         try
         {
             return checked((long)Math.Round(value * multiplier, MidpointRounding.AwayFromZero));

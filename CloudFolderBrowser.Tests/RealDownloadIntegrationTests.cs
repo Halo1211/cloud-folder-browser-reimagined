@@ -84,6 +84,60 @@ public sealed class RealDownloadIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task HistoryRetry_UnknownSizePreservesPartialBytesAndLearnsRemoteSize()
+    {
+        byte[] payload = CreatePayload(256 * 1024, 47);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        string destination = Path.Combine(_root, "history-resume.bin");
+        await File.WriteAllBytesAsync(destination + ".part", payload[..8192]);
+        var entry = new DownloadHistoryEntry
+        {
+            FileName = "history-resume.bin", CloudPath = "/history-resume.bin", SourceUrl = server.Url("file.bin").AbsoluteUri,
+            SavePath = destination, ExpectedSize = 0, HasKnownSize = false, Status = DownloadJobStatus.Paused
+        };
+        await GetHistoryStore().UpsertAsync(entry);
+        var restored = Assert.Single(await GetHistoryStore().GetAllAsync());
+        CloudFile retry = Assert.IsType<CloudFile>(restored.ToRetryFile());
+
+        CommonDownload download = await RunDownloadAsync(new[] { retry }, CloudServiceType.Other);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal("bytes=8192-", Assert.Single(server.Requests).Headers["Range"]);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(destination));
+        var completed = Assert.Single(await GetHistoryStore().GetAllAsync());
+        Assert.Equal(entry.Id, completed.Id);
+        Assert.True(completed.HasKnownSize);
+        Assert.Equal(payload.Length, completed.ExpectedSize);
+    }
+
+    [Fact]
+    public async Task HistoryRetry_ResolverRequiredDoesNotRequestSharePageAsAFile()
+    {
+        byte[] payload = CreatePayload(1024, 48);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        var entry = new DownloadHistoryEntry
+        {
+            FileName = "resolved-retry.bin", CloudPath = "/resolved-retry.bin", SourceUrl = server.Url("share").AbsoluteUri,
+            SavePath = Path.Combine(_root, "resolved-retry.bin"), HasKnownSize = false,
+            RequiresLinkResolver = true, Status = DownloadJobStatus.Paused
+        };
+        await GetHistoryStore().UpsertAsync(entry);
+        var restored = Assert.Single(await GetHistoryStore().GetAllAsync());
+        CloudFile retry = Assert.IsType<CloudFile>(restored.ToRetryFile());
+        var route = new RecordingResolver(server.Url("download.bin"), payload.Length);
+        var account = new CloudAccountProfile { Provider = CloudAccountProvider.RealDebrid, IsActive = true, Secret = "fixture" };
+        using var automatic = new AutomaticDownloadLinkResolver(new[] { account }, null, _ => route);
+
+        CommonDownload download = await RunDownloadAsync(new[] { retry }, CloudServiceType.Other, automatic);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(1, route.ResolveCount);
+        Assert.Equal("/download.bin", Assert.Single(server.Requests).Path);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(entry.SavePath));
+        Assert.True(Assert.Single(await GetHistoryStore().GetAllAsync()).RequiresLinkResolver);
+    }
+
+    [Fact]
     public async Task LargeFile_UsesValidatedConcurrentSegmentsAndAssemblesExactBytes()
     {
         byte[] payload = CreatePayload(32 * 1024 * 1024, 211);
@@ -645,6 +699,588 @@ public sealed class RealDownloadIntegrationTests : IDisposable
             && range == $"bytes={partialLength}-");
     }
 
+    [Fact]
+    public async Task Overwrite_DoesNotResumeFromUnrelatedExistingFile()
+    {
+        byte[] payload = CreatePayload(4096, 310);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("overwrite.bin", server.Url("overwrite.bin"), payload.Length);
+        file.PlannedAction = SyncPlanAction.Overwrite;
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride, new byte[1024]);
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+        Assert.False(Assert.Single(server.Requests).Headers.ContainsKey("Range"));
+    }
+
+    [Fact]
+    public async Task FailedOverwrite_PreservesOriginalFile()
+    {
+        byte[] original = CreatePayload(1024, 311);
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse { StatusCode = HttpStatusCode.NotFound });
+        CloudFile file = CreateFile("preserve.bin", server.Url("preserve.bin"), 4096);
+        file.PlannedAction = SyncPlanAction.Overwrite;
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride, original);
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+
+        Assert.Single(download.FailedDownloads);
+        Assert.True(File.Exists(file.LocalSavePathOverride));
+        Assert.Equal(original, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+    }
+
+    [Fact]
+    public async Task NeverOverwrite_ProtectsExistingFileEvenWhenSizeDiffers()
+    {
+        byte[] original = CreatePayload(1024, 312);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(new byte[4096], request));
+        CloudFile file = CreateFile("skip-existing.bin", server.Url("skip-existing.bin"), 4096);
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride, original);
+        CommonDownload download = CreateDownload(new[] { file }, CloudServiceType.Other);
+        download.OverwriteMode = 0;
+        Task completion = WaitForCompletionAsync(download);
+
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        Assert.Empty(server.Requests);
+        Assert.Equal(original, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+        Assert.Equal(DownloadJobStatus.Skipped, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Download_PreservesLiteralPercentEncodedTextInLocalPath()
+    {
+        byte[] payload = CreatePayload(1024, 313);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("literal%27.bin", server.Url("literal.bin"), payload.Length);
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.True(File.Exists(file.LocalSavePathOverride));
+        Assert.Equal(file.LocalSavePathOverride, Assert.Single(await GetHistoryStore().GetAllAsync()).SavePath);
+    }
+
+    [Fact]
+    public async Task UnknownEmptyFile_RecordsKnownZeroSize()
+    {
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse());
+        CloudFile file = CreateFile("empty-unknown.bin", server.Url("empty.bin"), 0);
+        file.HasKnownSize = false;
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.True(file.HasKnownSize);
+        Assert.Equal(0, file.Size);
+    }
+
+    [Fact]
+    public async Task PartialResponseWithoutContentRange_IsRejected()
+    {
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse
+        {
+            StatusCode = HttpStatusCode.PartialContent,
+            Body = new byte[1024]
+        });
+        CloudFile file = CreateFile("invalid-range.bin", server.Url("invalid.bin"), 0);
+        file.HasKnownSize = false;
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+
+        Assert.Single(download.FailedDownloads);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+    }
+
+    [Fact]
+    public async Task CompletePartialFile_IsStillCheckedAgainstRemoteChecksum()
+    {
+        await using var server = new LoopbackDownloadServer((_, _) =>
+        {
+            var response = new LoopbackResponse { StatusCode = HttpStatusCode.RequestedRangeNotSatisfiable };
+            response.Headers["Content-Range"] = "bytes */1024";
+            response.Headers["x-goog-hash"] = "md5=" + Convert.ToBase64String(new byte[16]);
+            return response;
+        });
+        CloudFile file = CreateFile("unchecked-part.bin", server.Url("part.bin"), 1024);
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride + ".part", new byte[1024]);
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+
+        Assert.Single(download.FailedDownloads);
+        Assert.Single(server.Requests);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+    }
+
+    [Theory]
+    [InlineData("items */1024")]
+    [InlineData("bytes 0-1023/1024")]
+    public async Task SixthPass_CompletePartRejectsInvalidUnsatisfiedRange(string contentRange)
+    {
+        await using var server = new LoopbackDownloadServer((_, _) =>
+        {
+            var response = new LoopbackResponse { StatusCode = HttpStatusCode.RequestedRangeNotSatisfiable };
+            response.Headers["Content-Range"] = contentRange;
+            return response;
+        });
+        CloudFile file = CreateFile("invalid-complete.bin", server.Url("part.bin"), 1024);
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride + ".part", new byte[1024]);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Single(download.FailedDownloads);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+    }
+
+    [Fact]
+    public async Task SixthPass_ResumeAcceptsCaseInsensitiveByteUnit()
+    {
+        byte[] payload = CreatePayload(1024, 71);
+        await using var server = new LoopbackDownloadServer((request, _) =>
+        {
+            var response = LoopbackResponse.ForPayload(payload, request);
+            response.Headers["Content-Range"] = response.Headers["Content-Range"].Replace("bytes", "BYTES");
+            return response;
+        });
+        CloudFile file = CreateFile("uppercase.bin", server.Url("part.bin"), payload.Length);
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride + ".part", payload[..512]);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride!));
+    }
+
+    [Fact]
+    public async Task SixthPass_FullResponseIgnoresContentRangeMetadata()
+    {
+        byte[] payload = CreatePayload(1024, 72);
+        await using var server = new LoopbackDownloadServer((_, _) =>
+        {
+            var response = new LoopbackResponse { Body = payload };
+            response.Headers["Content-Range"] = "bytes 0-1023/2048";
+            return response;
+        });
+        CloudFile file = CreateFile("full.bin", server.Url("full.bin"), payload.Length);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride!));
+    }
+
+    [Fact]
+    public async Task SixthPass_RequestsIdentityEncodingAndRejectsEncodedRepresentation()
+    {
+        await using var server = new LoopbackDownloadServer((_, _) =>
+        {
+            var response = new LoopbackResponse { Body = new byte[1024] };
+            response.Headers["Content-Encoding"] = "gzip";
+            return response;
+        });
+        CloudFile file = CreateFile("encoded.bin", server.Url("encoded.bin"), 0);
+        file.HasKnownSize = false;
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Single(download.FailedDownloads);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+        Assert.Equal("identity", Assert.Single(server.Requests).Headers["Accept-Encoding"]);
+    }
+
+    [Fact]
+    public async Task WebDavListing_PreservesPlusAndHonorsHiddenFalse()
+    {
+        const string xml = """
+            <d:multistatus xmlns:d="DAV:">
+              <d:response><d:href>/a+b.bin</d:href><d:propstat><d:prop>
+                <d:ishidden>0</d:ishidden><d:getcontentlength>4</d:getcontentlength>
+              </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+            </d:multistatus>
+            """;
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse
+        {
+            StatusCode = (HttpStatusCode)207,
+            Body = Encoding.UTF8.GetBytes(xml),
+            ContentType = "application/xml"
+        });
+        var client = NetworkClientAdapters.CreateWebDavClient(new NetworkCredential("test", "test"));
+        client.Server = server.BaseUri.GetLeftPart(UriPartial.Authority);
+
+        var item = Assert.Single(await client.List());
+
+        Assert.Equal("a+b.bin", item.DisplayName);
+        Assert.False(item.IsHidden);
+        Assert.Equal(4, item.ContentLength);
+    }
+
+    [Fact]
+    public async Task WebDavListing_SkipsResponsesWithoutHrefAndFailedProperties()
+    {
+        const string xml = """
+            <d:multistatus xmlns:d="DAV:" xmlns:x="urn:custom">
+              <d:response><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+              <d:response><d:href>/</d:href><d:propstat><d:prop>
+                <d:resourcetype><d:collection /></d:resourcetype>
+              </d:prop></d:propstat></d:response>
+              <d:response><d:href>/folder/</d:href>
+                <d:propstat><d:prop>
+                  <d:getcontentlength>4</d:getcontentlength>
+                  <d:resourcetype><x:something /><d:collection /></d:resourcetype>
+                </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+                <d:propstat><d:prop><d:getcontentlength>99</d:getcontentlength></d:prop>
+                  <d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>
+              </d:response>
+            </d:multistatus>
+            """;
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse
+        {
+            StatusCode = (HttpStatusCode)207,
+            Body = Encoding.UTF8.GetBytes(xml),
+            ContentType = "application/xml"
+        });
+        var client = NetworkClientAdapters.CreateWebDavClient(new NetworkCredential("test", "test"));
+        client.Server = server.BaseUri.GetLeftPart(UriPartial.Authority);
+
+        var item = Assert.Single(await client.List());
+
+        Assert.True(item.IsCollection);
+        Assert.Equal(4, item.ContentLength);
+    }
+
+    [Fact]
+    public async Task MegaNeverOverwrite_ProtectsDifferentSizedExistingFile()
+    {
+        string destination = Path.Combine(_root, "mega-skip.bin");
+        byte[] original = CreatePayload(1024, 315);
+        await File.WriteAllBytesAsync(destination, original);
+        using var bar = new ProgressBar();
+        using var label = new Label();
+        using var summary = new Label();
+        using var tooltip = new ToolTip();
+        SynchronizationContext.SetSynchronizationContext(null);
+        var node = new AuditMegaNode();
+        var file = new CloudFile(node.Name, DateTime.MinValue, DateTime.MinValue, node.Size)
+        {
+            Path = "/" + node.Name,
+            MegaNode = node,
+            LocalSavePathOverride = destination
+        };
+        var download = new MegaDownload(new CG.Web.MegaApiClient.MegaApiClient(), new() { file },
+            new[] { bar }, new[] { label, summary }, tooltip, _root, overwriteMode: 0,
+            folderNewFiles: false, historyStore: GetHistoryStore()) { MaxDownloadRetries = 0 };
+        Task completion = WaitForCompletionAsync(download);
+
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        await download.Start();
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(original, await File.ReadAllBytesAsync(destination));
+        Assert.Equal(DownloadJobStatus.Skipped, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+    }
+
+    private sealed class AuditMegaNode : CG.Web.MegaApiClient.INode
+    {
+        public string Id => "audit-node";
+        public string ParentId => "root";
+        public string Name => "mega-skip.bin";
+        public long Size => 4096;
+        public DateTime? ModificationDate => null;
+        public DateTime CreationDate => DateTime.MinValue;
+        public CG.Web.MegaApiClient.NodeType Type => CG.Web.MegaApiClient.NodeType.File;
+        public string Owner => "owner";
+        public bool Equals(CG.Web.MegaApiClient.INodeInfo? other) => other?.Id == Id;
+    }
+
+    [Fact]
+    public async Task SegmentedDownload_RecoversFromNullManifestFields()
+    {
+        byte[] payload = CreatePayload(17 * 1024 * 1024, 316);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("null-map.bin", server.Url("null-map.bin"), payload.Length);
+        await File.WriteAllTextAsync(file.LocalSavePathOverride + ".part.segments.json",
+            "{\"IdentityHash\":null,\"Validator\":null,\"TotalLength\":" + payload.Length + ",\"Blocks\":null}");
+
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+    }
+
+    [Theory]
+    [InlineData("../outside.txt")]
+    [InlineData("../unsafe-sibling/outside.txt")]
+    [InlineData("..\\outside.txt")]
+    public async Task ArchiveExtraction_RejectsEntriesOutsideDestination(string entryName)
+    {
+        Properties.Settings.Default.archivePostProcessingEnabled = true;
+        Properties.Settings.Default.archiveToolPath = string.Empty;
+        Properties.Settings.Default.protectedArchivePassword = string.Empty;
+        string archivePath = Path.Combine(_root, "unsafe.zip");
+        using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+        {
+            using var writer = new StreamWriter(archive.CreateEntry(entryName).Open());
+            writer.Write("must not escape");
+        }
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new DownloadPostProcessor().ProcessAsync(archivePath, CancellationToken.None));
+
+        Assert.True(File.Exists(archivePath));
+        Assert.False(File.Exists(Path.Combine(_root, "outside.txt")));
+        Assert.False(File.Exists(Path.Combine(_root, "unsafe-sibling", "outside.txt")));
+    }
+
+    [Theory]
+    [InlineData("file.bin.part")]
+    [InlineData("file.bin.part.assembling")]
+    [InlineData("file.bin.part.segments.json")]
+    [InlineData("file.bin.part.segment.anything")]
+    [InlineData("file.bin/child.bin")]
+    public void Download_RejectsTargetsThatOverlapOtherTransferFiles(string conflictingName)
+    {
+        CloudFile first = CreateFile("file.bin", new Uri("https://example.invalid/first"), 1);
+        CloudFile second = CreateFile(conflictingName, new Uri("https://example.invalid/second"), 1);
+
+        Assert.Throws<InvalidDataException>(() => CreateDownload(new[] { first, second }, CloudServiceType.Other));
+    }
+
+    [Fact]
+    public void Download_RejectsZeroWorkerControls()
+    {
+        CloudFile file = CreateFile("no-worker.bin", new Uri("https://example.invalid/file"), 1);
+        Assert.Throws<ArgumentException>(() => CreateDownload(new[] { file }, CloudServiceType.Other, concurrency: 0));
+    }
+
+    [Fact]
+    public async Task Download_RepeatedStartPreservesCompletedHistory()
+    {
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(new byte[1024], request));
+        CloudFile file = CreateFile("start-once.bin", server.Url("file"), 1024);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other);
+
+        await download.Start();
+
+        Assert.Equal(DownloadJobStatus.Completed, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+        Assert.Single(server.Requests);
+    }
+
+    [Fact]
+    public async Task Par2Processing_DisabledRepairDoesNotReportSuccess()
+    {
+        Properties.Settings.Default.archivePostProcessingEnabled = true;
+        Properties.Settings.Default.par2RepairEnabled = false;
+        string path = Path.Combine(_root, "unrepaired.par2");
+        await File.WriteAllBytesAsync(path, new byte[1]);
+
+        var result = await new DownloadPostProcessor().ProcessAsync(path, CancellationToken.None);
+
+        Assert.False(result.Processed);
+        Assert.DoesNotContain("completed", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StopBeforeStart_PersistsPausedHistoryWithoutRequests()
+    {
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(new byte[1], request));
+        CloudFile file = CreateFile("stopped-before-start.bin", server.Url("file"), 1);
+        CommonDownload download = CreateDownload(new[] { file }, CloudServiceType.Other);
+        Task completion = WaitForCompletionAsync(download);
+        download.Stop();
+
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        Assert.Empty(server.Requests);
+        Assert.Equal(DownloadJobStatus.Paused, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Stop_PersistsPausedHistoryForQueuedFilesBeforeCompletionEvent()
+    {
+        byte[] payload = CreatePayload(1024 * 1024, 401);
+        await using var server = new LoopbackDownloadServer((request, _) =>
+        {
+            var response = LoopbackResponse.ForPayload(payload, request);
+            response.ChunkSize = 16 * 1024;
+            response.DelayPerChunk = TimeSpan.FromMilliseconds(12);
+            return response;
+        });
+        CloudFile[] files = Enumerable.Range(0, 3)
+            .Select(index => CreateFile($"stop-queued-{index}.bin", server.Url($"file-{index}"), payload.Length)).ToArray();
+        CommonDownload download = CreateDownload(files, CloudServiceType.Other, concurrency: 1);
+        Task completion = WaitForCompletionAsync(download);
+        await download.Start();
+        await WaitUntilAsync(() => server.Requests.Count > 0, TimeSpan.FromSeconds(8));
+
+        download.Stop();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        var history = await GetHistoryStore().GetAllAsync();
+        Assert.Equal(3, history.Count);
+        Assert.All(history, entry => Assert.Equal(DownloadJobStatus.Paused, entry.Status));
+    }
+
+    [Fact]
+    public async Task MegaStopBeforeStart_PersistsPausedHistory()
+    {
+        using var bar = new ProgressBar();
+        using var label = new Label();
+        using var summary = new Label();
+        using var tooltip = new ToolTip();
+        SynchronizationContext.SetSynchronizationContext(null);
+        var node = new AuditMegaNode();
+        var file = new CloudFile(node.Name, DateTime.MinValue, DateTime.MinValue, node.Size)
+        {
+            Path = "/" + node.Name, MegaNode = node, LocalSavePathOverride = Path.Combine(_root, node.Name)
+        };
+        var download = new MegaDownload(new CG.Web.MegaApiClient.MegaApiClient(), new() { file },
+            new[] { bar }, new[] { label, summary }, tooltip, _root,
+            folderNewFiles: false, historyStore: GetHistoryStore());
+        Task completion = WaitForCompletionAsync(download);
+        download.Stop();
+
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        Assert.Equal(DownloadJobStatus.Paused, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+    }
+
+    [Fact]
+    public async Task StopAfterCommit_DoesNotDowngradeCompletedDownloadDuringPostProcessing()
+    {
+        Properties.Settings.Default.archivePostProcessingEnabled = true;
+        Properties.Settings.Default.archiveToolPath = string.Empty;
+        Properties.Settings.Default.protectedArchivePassword = string.Empty;
+        byte[] payload;
+        using (var stream = new MemoryStream())
+        {
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                using var writer = new StreamWriter(zip.CreateEntry("payload.txt").Open());
+                writer.Write("payload");
+            }
+            payload = stream.ToArray();
+        }
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("cancel-extraction.zip", server.Url("archive"), payload.Length);
+        CommonDownload? download = null;
+        var resolver = new CancelAfterCommitResolver(() => download!.Stop());
+        download = CreateDownload(new[] { file }, CloudServiceType.Other, resolver);
+        Task completion = WaitForCompletionAsync(download);
+
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(8));
+
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride!));
+        Assert.Equal(DownloadJobStatus.Completed, Assert.Single(await GetHistoryStore().GetAllAsync()).Status);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Single(server.Requests);
+    }
+
+    private sealed class CancelAfterCommitResolver(Action onSuccess) : IAutomaticDownloadLinkResolver
+    {
+        public string DisplayName => "Test";
+        public Task<DebridResolvedLink> ResolveAsync(Uri source, CancellationToken cancellationToken) => Task.FromResult(new DebridResolvedLink(source));
+        public Task<DebridResolvedLink> ResolveAsync(CloudFile file, Uri source, CancellationToken cancellationToken) => ResolveAsync(source, cancellationToken);
+        public void ReportSuccess(CloudFile file, Uri source) => onSuccess();
+        public void ReportFailure(CloudFile file, Uri source, Exception exception) { }
+    }
+
+    [Fact]
+    public async Task TenthPass_ResolvedUrlDoesNotReceiveSourceCredentials()
+    {
+        byte[] payload = CreatePayload(128, 201);
+        await using var source = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        await using var destination = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("scoped-auth.bin", source.Url("source"), payload.Length);
+        CommonDownload download = await RunDownloadAsync([file], CloudServiceType.Other,
+            new RecordingResolver(destination.Url("resolved"), payload.Length), maxRetries: 0,
+            networkCredential: new NetworkCredential("fixture-user", "fixture-secret"));
+        Assert.Empty(download.FailedDownloads);
+        Assert.False(Assert.Single(destination.Requests).Headers.ContainsKey("Authorization"));
+        Assert.Empty(source.Requests);
+    }
+
+    [Fact]
+    public async Task TenthPass_SameOriginResolvedUrlStillReceivesSourceCredentials()
+    {
+        byte[] payload = CreatePayload(128, 202);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("same-auth.bin", server.Url("source"), payload.Length);
+        CommonDownload download = await RunDownloadAsync([file], CloudServiceType.Other,
+            new RecordingResolver(server.Url("resolved"), payload.Length), maxRetries: 0,
+            networkCredential: new NetworkCredential("fixture-user", "fixture-secret"));
+        Assert.Empty(download.FailedDownloads);
+        Assert.True(Assert.Single(server.Requests).Headers.ContainsKey("Authorization"));
+    }
+
+    [Fact]
+    public async Task TenthPass_RetryFullResponseDoesNotUsePreviousRepresentationChecksum()
+    {
+        byte[] first = CreatePayload(128, 203);
+        byte[] second = CreatePayload(128, 204);
+        await using var server = new LoopbackDownloadServer((_, index) =>
+        {
+            var response = new LoopbackResponse { Body = second };
+            if (index == 1)
+                response.Headers["Digest"] = "sha-256=" + Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(first));
+            return response;
+        });
+        CloudFile file = CreateFile("new-representation.bin", server.Url("file"), second.Length);
+        CommonDownload download = await RunDownloadAsync([file], CloudServiceType.Other, maxRetries: 1);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(second, await File.ReadAllBytesAsync(file.LocalSavePathOverride!));
+        Assert.Equal(2, server.Requests.Count);
+    }
+
+    [Fact]
+    public async Task TenthPass_RestartedFullResponseStillValidatesContentMd5()
+    {
+        byte[] payload = CreatePayload(128, 205);
+        await using var server = new LoopbackDownloadServer((_, _) =>
+        {
+            var response = new LoopbackResponse { Body = payload };
+            response.Headers["Content-MD5"] = Convert.ToBase64String(new byte[16]);
+            return response;
+        });
+        CloudFile file = CreateFile("restart-hash.bin", server.Url("file"), payload.Length);
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride + ".part", payload[..16]);
+        CommonDownload download = await RunDownloadAsync([file], CloudServiceType.Other, maxRetries: 0);
+        Assert.Single(download.FailedDownloads);
+        Assert.False(File.Exists(file.LocalSavePathOverride));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TenthPass_RedirectReevaluatesCookieDomainAndPath(bool differentHost)
+    {
+        byte[] payload = CreatePayload(128, 206);
+        await using var server = new LoopbackDownloadServer((request, _) =>
+        {
+            if (request.Path == "/private/source")
+            {
+                var redirect = new LoopbackResponse { StatusCode = HttpStatusCode.Found };
+                redirect.Headers["Location"] = differentHost ? "http://localhost:PORT/final" : "/final";
+                // The fixture's handler is supplied the Host header of the actual listener.
+                redirect.Headers["Location"] = redirect.Headers["Location"].Replace("PORT", request.Headers["Host"].Split(':')[1]);
+                return redirect;
+            }
+            return LoopbackResponse.ForPayload(payload, request);
+        });
+        CloudFile file = CreateFile("redirect-cookie.bin", server.Url("private/source"), payload.Length);
+        var session = new CloudflareSession("fixture-browser", [new FlareSolverrCookie
+        {
+            Name = "clearance", Value = "fixture-cookie", Domain = "127.0.0.1", Path = differentHost ? "/" : "/private"
+        }]);
+        CommonDownload download = CreateDownload([file], CloudServiceType.Other, maxRetries: 0, session: session);
+        Task completion = WaitForCompletionAsync(download);
+        await download.Start();
+        await completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Empty(download.FailedDownloads);
+        Assert.Collection(server.Requests,
+            request => Assert.Contains("clearance=fixture-cookie", request.Headers.GetValueOrDefault("Cookie") ?? ""),
+            request => Assert.False(request.Headers.ContainsKey("Cookie")));
+    }
+
     private async Task<CommonDownload> RunDownloadAsync(
         IEnumerable<CloudFile> files,
         CloudServiceType service,
@@ -667,7 +1303,8 @@ public sealed class RealDownloadIntegrationTests : IDisposable
         IDownloadLinkResolver? resolver = null,
         int maxRetries = 1,
         int concurrency = 1,
-        NetworkCredential? networkCredential = null)
+        NetworkCredential? networkCredential = null,
+        CloudflareSession? session = null)
     {
         var bars = Enumerable.Range(0, concurrency).Select(_ => new ProgressBar()).ToArray();
         var labels = Enumerable.Range(0, concurrency + 1).Select(_ => new Label()).ToArray();
@@ -691,6 +1328,7 @@ public sealed class RealDownloadIntegrationTests : IDisposable
             overwriteMode: 1,
             networkCredential: networkCredential,
             folderNewFiles: false,
+            flareSolverrSession: session,
             linkResolver: resolver,
             historyStore: GetHistoryStore(),
             checksumStore: GetChecksumStore())
