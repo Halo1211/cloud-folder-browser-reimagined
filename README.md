@@ -1,9 +1,9 @@
 <div align="center">
   <img src="CloudFolderBrowser/Assets/cloud-browser-icon.png" width="144" alt="Cloud Folder Browser Reimagined logo">
   <h1>Cloud Folder Browser Reimagined</h1>
-  <p>A Windows desktop application for browsing public cloud folders, comparing them with local storage, and downloading only what is needed.</p>
+  <p>Browse public cloud shares, compare them with a local folder, and download the files you need.</p>
   <p>
-    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.3-D6A15B" alt="Version 1.0.3"></a>
+    <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest"><img src="https://img.shields.io/badge/version-1.0.4-D6A15B" alt="Version 1.0.4"></a>
     <a href="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml"><img src="https://github.com/Halo1211/cloud-folder-browser-reimagined/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-20201D" alt="GPL-3.0 license"></a>
     <a href="#requirements"><img src="https://img.shields.io/badge/platform-Windows%20x64-20201D" alt="Windows x64"></a>
@@ -12,93 +12,65 @@
 
 ![Main window](docs/screenshots/main-window.png)
 
-This fork keeps the original Cloud Folder Browser workflow—load a shared folder, inspect its contents, compare it with a local directory, and download missing files—while extending it into a multi-provider sync and transfer tool.
+## Download
 
-## What is new in v1.0
+Download the EXE or portable ZIP from the
+[latest release](https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest).
+Extract the ZIP into a writable folder and keep `CloudFolderBrowser.dll.config`
+beside the executable. The self-contained package includes the .NET runtime.
 
-Version 1.0.3 improves download integrity, cancellation, credential isolation,
-provider parsing, saved-data recovery, sync preview, and export safety. The
-regression suite now includes 425 tests. See the [changelog](CHANGELOG.md) and
-the [September audit](docs/bug-audit-2026-09-27.md) and
-[October audit](docs/bug-audit-2026-10-01.md) for details and verification limits.
+1. Open the application and add a cloud share.
+2. Choose a local folder and select the remote folders to compare.
+3. Select **Compare folders**.
+4. Review the **Download**, **Overwrite**, **Skip**, or **Rename** actions.
+5. Start the transfer. Use **Download history** to resume interrupted HTTP jobs.
 
-### Multi-cloud accounts and download routing
+The executable is unsigned. Check `SHA256SUMS.txt` from the release before running it.
 
-- Encrypted account storage for MEGA, Yandex Disk, WebDAV, Dropbox, Google Drive, AllDebrid, Real-Debrid, Debrid-Link, Premiumize.me, and TorBox.
-- Independent active accounts per provider.
-- Automatic routing that prefers native or direct downloads and falls back to eligible debrid accounts when required.
-- Per-host scoring and cooldowns to avoid repeatedly selecting a provider that is failing.
-- Portable provider plug-ins through the versioned `ICloudFolderProviderV2` contract.
+## Features
 
-### Resumable, verified transfers
+- Public-share browsing and local folder comparison.
+- Resumable HTTP transfers, validated byte ranges, optional segmented downloads,
+  remote checksums, and local SHA-256 manifests.
+- Download history, retries, per-host scheduling, priorities, bandwidth limits,
+  speed, and estimated completion time.
+- Encrypted accounts and share passwords, with automatic direct/debrid routing.
+- DNS-over-HTTPS/TLS, custom DNS, HTTP(S)/SOCKS proxies, and per-provider routes.
+- Password-encrypted settings backups, JDownloader exports, and optional archive
+  extraction and PAR2 repair.
+- Light, dark, and system themes, plus a versioned provider plug-in interface.
 
-- HTTP `.part` resume with size validation before completion.
-- Optional multi-segment downloads for files of at least 16 MiB, with safe fallback when a server does not implement byte ranges correctly.
-- Persistent 8 MiB byte maps so completed segments can survive retries and worker-count changes.
-- Remote checksum support for `Digest`, `Content-MD5`, and `x-goog-hash: md5` headers.
-- Fair per-host scheduling, transfer priorities, a shared bandwidth limit, live speed, and ETA.
-- Persistent download history with pause, resume, and retry controls.
-
-### Safer folder synchronization
-
-- A review step before files are written to disk.
-- Per-file actions: **Download**, **Overwrite**, **Skip**, or **Rename**.
-- Optional SHA-256 manifests for detecting local corruption.
-- ZIP extraction with path-traversal protection, plus optional 7-Zip and PAR2 integration.
-
-### Network and privacy controls
-
-- System, UDP, DNS-over-HTTPS, and DNS-over-TLS resolution with Cloudflare, Google, Quad9, AdGuard, or a custom endpoint.
-- Direct, system, HTTP(S), SOCKS4/4a, and SOCKS5 proxy modes.
-- Per-provider proxy rules, connection diagnostics, and provider health checks.
-- Windows user-scoped encryption for saved credentials, source URLs, tokens, and proxy passwords.
-- Password-encrypted `.cfbackup` export and import for settings and accounts.
-
-### Updated desktop experience
-
-- System, light, and dark themes remembered between launches.
-- A clearer two-pane browser and sync review flow.
-- New application icon and an amber loading indicator aligned with the charcoal-and-amber interface.
-- Consistent application branding across the main window, dialogs, executable, and release metadata.
+See the [changelog](CHANGELOG.md) for the changes in v1.0.4.
 
 ## Supported sources
 
-| Source | Public links | Account browsing | Notes |
-| --- | :---: | :---: | --- |
-| MEGA | Yes | Yes | Native transfers or an eligible debrid route |
-| AllSync / Qloud | Yes | — | Password-protected shares and resumable WebDAV downloads |
-| Yandex Disk | Yes | Yes | Public shares and token-based imports |
-| WebDAV | — | Yes | Includes compatible Nextcloud and ownCloud endpoints |
-| Dropbox | Yes | Token | Public files/folders; private access requires a user-supplied token |
-| Google Drive | Yes | Token | Files plus Docs, Sheets, and Slides exports |
-| TeraBox | Yes | — | Resolved through a configured debrid account |
-| Generic HTTP(S) | Yes | — | Direct files and supported hoster links |
-| h5ai / The Trove | Yes | — | Portable public-folder providers |
+| Source | Public-share support | Notes |
+| --- | --- | --- |
+| MEGA | Files and folders | Native downloads and account imports; eligible debrid routes are optional |
+| AllSync / Qloud | Files and folders | Password-protected shares and WebDAV transfers |
+| Yandex Disk | Public resources | OAuth tokens support account imports |
+| Dropbox | Files and folder ZIP downloads | Private account browsing is not implemented |
+| Google Drive | Files and document exports | Docs, Sheets, and Slides exports; public folder browsing is not implemented |
+| TeraBox | Share links | Requires an active debrid account that supports the source |
+| Generic HTTP(S) | Direct files and hoster links | Some hosters require a configured resolver |
+| h5ai / The Trove | Web indexes | Availability depends on the source site |
 
-Cloud Folder Browser does not ship shared OAuth client secrets and does not bypass provider policies. Availability still depends on each provider, account plan, and supported host list.
-
-## Download and first run
-
-1. Download `CloudFolderBrowser.exe` from the [latest release](https://github.com/Halo1211/cloud-folder-browser-reimagined/releases/latest).
-2. Place it in a writable folder. Keep `CloudFolderBrowser.dll.config` beside it when using the portable package.
-3. Open the application, add a cloud share, and choose a local folder.
-4. Select the remote folders you want, then choose **Compare folders**.
-5. Review the proposed actions before starting the transfer.
-
-Windows may display a SmartScreen warning for unsigned community builds. Check the published SHA-256 file before running the executable.
+The account manager also stores and validates WebDAV, Dropbox, Google Drive,
+AllDebrid, Real-Debrid, Debrid-Link, Premiumize.me, and TorBox credentials.
+Adding an account does not provide private folder browsing for every provider.
+Access depends on the provider, account plan, and supported host list.
 
 ## Requirements
 
 - Windows 10 or Windows 11, x64.
-- The self-contained release does not require a separate .NET installation.
-- Building from source requires the .NET 9 SDK selected by [`global.json`](global.json).
+- For source builds: the .NET 9 SDK selected by [global.json](global.json).
 
-Optional integrations:
+Optional tools:
 
-- [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) for supported shares protected by a browser challenge.
+- [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) for supported browser challenges.
 - JDownloader 2 for exported link packages.
 - 7-Zip for RAR, 7z, and password-protected archive extraction.
-- PAR2 command-line tools for optional repair.
+- PAR2 command-line tools for archive repair.
 
 ## Build from source
 
@@ -106,45 +78,46 @@ Optional integrations:
 git clone https://github.com/Halo1211/cloud-folder-browser-reimagined.git
 cd cloud-folder-browser-reimagined
 dotnet restore CloudFolderBrowser.sln
-dotnet test CloudFolderBrowser.Tests/CloudFolderBrowser.Tests.csproj -c Release --no-restore
-dotnet build CloudFolderBrowser.sln -c Release --no-restore
+dotnet build CloudFolderBrowser.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
+dotnet test CloudFolderBrowser.Tests/CloudFolderBrowser.Tests.csproj -c Release --no-build --no-restore
 ```
 
-Create the same self-contained Windows x64 package used for releases:
+Create the Windows x64 release package:
 
 ```powershell
 ./tools/Build-Release.ps1
 ```
 
-The script clears previous local release outputs, runs the test suite, publishes a single-file executable, creates a ZIP package, and writes SHA-256 checksums under `release/`.
+The script runs the tests, publishes the executable, and creates the ZIP,
+release notes, and SHA-256 checksums under `release/`. Local `portable.config`
+settings are preserved and excluded from the package. Version tags publish
+these assets through GitHub Actions.
 
-Remove generated build and diagnostic output while retaining release assets:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development instructions and
+[docs/testing.md](docs/testing.md) for test coverage and known limits.
 
-```powershell
-./tools/Clean-Repository.ps1
-```
+## Data and privacy
 
-Local application settings, credentials, folder caches, transfer artifacts, and
-release binaries are excluded from source control. The version tag triggers the
-GitHub Actions release workflow, which publishes the EXE, portable ZIP, and
-checksums as release assets.
+Account data, download history, and checksum manifests are stored under
+`%LOCALAPPDATA%\CloudFolderBrowser`. Portable settings and saved folder lists
+can also reside beside the application or in its working directory.
+Credentials and history source URLs use Windows user-scoped encryption.
+Exported `.cfbackup` files use password-derived AES-GCM encryption.
 
-## Data locations and security notes
-
-Account data, download history, integrity manifests, and application state are stored under `%LOCALAPPDATA%\CloudFolderBrowser`. Sensitive values are protected for the current Windows user. An exported `.cfbackup` is encrypted with a password-derived AES-GCM key; a forgotten backup password cannot be recovered.
-
-Provider plug-ins execute inside the application process. Install DLLs only from sources you trust. A dedicated load context isolates dependency resolution, but it is not a security sandbox.
+Download destinations must use physical folders rather than junctions or
+symbolic links. Provider plug-ins execute in-process; install trusted DLLs only.
+See [SECURITY.md](SECURITY.md) before sharing logs or reporting a vulnerability.
 
 ## Provider plug-ins
 
-Additional providers can be placed in a `Providers` directory beside the executable. A plug-in must implement `ICloudFolderProviderV2` and expose a public parameterless constructor. The v1 interface remains supported for compatibility.
+Place provider DLLs in a `Providers` directory beside the executable.
+Implement `ICloudFolderProviderV2` with a public parameterless constructor.
+The v1 interface remains supported.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the local development workflow and pull-request expectations.
+## Credits and license
 
-## Project history
-
-Cloud Folder Browser Reimagined is a fork of [ptrsuder/cloud-folder-browser](https://github.com/ptrsuder/cloud-folder-browser). The original provider integrations and folder-comparison workflow remain the foundation of this project. The v1.0 release adds the account system, portable providers, transfer engine, sync review, network controls, tests, current interface, and release tooling described above.
-
-## License
+Based on [ptrsuder/cloud-folder-browser](https://github.com/ptrsuder/cloud-folder-browser).
+The repository includes adapted MEGA, WebDAV, Yandex Disk, and TreeViewAdv libraries;
+their directories retain upstream attribution and available license files.
 
 Distributed under the GNU General Public License v3.0. See [LICENSE](LICENSE).

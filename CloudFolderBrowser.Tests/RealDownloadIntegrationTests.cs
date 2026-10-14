@@ -1281,6 +1281,57 @@ public sealed class RealDownloadIntegrationTests : IDisposable
             request => Assert.False(request.Headers.ContainsKey("Cookie")));
     }
 
+    [Fact]
+    public async Task OctoberAudit_UnknownEstimatedSizeDoesNotRejectChunkedPayload()
+    {
+        byte[] payload = CreatePayload(37, 5);
+        await using var server = new LoopbackDownloadServer((_, _) => new LoopbackResponse
+        { Body = payload, UseChunkedEncoding = true });
+        CloudFile file = CreateFile("estimated.bin", server.Url("estimated.bin"), 40);
+        file.HasKnownSize = false;
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+        Assert.Equal(payload.Length, file.Size);
+    }
+
+    [Fact]
+    public async Task OctoberAudit_ShortenedUnknownRemoteRestartsStalePartial()
+    {
+        byte[] payload = CreatePayload(37, 7);
+        await using var server = new LoopbackDownloadServer((request, _) =>
+        {
+            if (request.Headers.ContainsKey("Range"))
+            {
+                var response = new LoopbackResponse { StatusCode = HttpStatusCode.RequestedRangeNotSatisfiable };
+                response.Headers["Content-Range"] = "bytes */37";
+                return response;
+            }
+            return new LoopbackResponse { Body = payload };
+        });
+        CloudFile file = CreateFile("shortened.bin", server.Url("shortened.bin"), 0);
+        file.HasKnownSize = false;
+        await File.WriteAllBytesAsync(file.LocalSavePathOverride + ".part", new byte[50]);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other, maxRetries: 0);
+        Assert.Empty(download.FailedDownloads);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(file.LocalSavePathOverride));
+        Assert.Equal(2, server.Requests.Count);
+    }
+
+    [Fact]
+    public async Task OctoberAudit_DownloadPreservesCloudModifiedTimeForNextSync()
+    {
+        byte[] payload = CreatePayload(37, 9);
+        await using var server = new LoopbackDownloadServer((request, _) => LoopbackResponse.ForPayload(payload, request));
+        CloudFile file = CreateFile("modified.bin", server.Url("modified.bin"), payload.Length);
+        file.Modified = DateTime.UtcNow.AddDays(1);
+        CommonDownload download = await RunDownloadAsync(new[] { file }, CloudServiceType.Other);
+        Assert.Empty(download.FailedDownloads);
+        var folder = new CloudFolder("root", DateTime.MinValue, DateTime.MinValue, 0) { Path = "/" };
+        folder.AddFile(file);
+        Assert.Empty(await new MainFormModel().BuildSyncPlanAsync(new() { folder }, new(), _root, true, false));
+    }
+
     private async Task<CommonDownload> RunDownloadAsync(
         IEnumerable<CloudFile> files,
         CloudServiceType service,

@@ -179,7 +179,7 @@ namespace CloudFolderBrowser
         private static string GetApplicationVersion()
         {
             Version? version = typeof(MainForm).Assembly.GetName().Version;
-            return version == null ? "1.0.3" : $"{version.Major}.{version.Minor}.{version.Build}";
+            return version == null ? "1.0.4" : $"{version.Major}.{version.Minor}.{version.Build}";
         }
 
         public bool UseProgressPanel = false;
@@ -815,6 +815,8 @@ namespace CloudFolderBrowser
                         new CloudProviderLoadContext(this, this),
                         ProgressStage);
                     Model.CloudPublicFolder.OriginalString = cloudFolderUrl;
+                    if (provider is not ICloudProviderV2 { ExecutionMode: CloudProviderExecutionMode.HostIntegrated })
+                        Model.UsePortableDownloadContext(Model.CloudPublicFolder);
                     Model.AllFolders = new List<CloudFolder>();
                     AddSubFolders(Model.CloudPublicFolder);
                     Model.CloudPublicFolder.CalculateFolderSize();
@@ -1307,13 +1309,13 @@ namespace CloudFolderBrowser
             {
                 foreach (CloudFolder subfolder in ((CloudFolder)node.Tag).Subfolders)
                 {
-                    ColumnNode subNode = new ColumnNode(HttpUtility.UrlDecode(subfolder.Name), subfolder.Created, subfolder.Modified, subfolder.Size);
+                    ColumnNode subNode = new ColumnNode(subfolder.Name, subfolder.Created, subfolder.Modified, subfolder.Size);
                     subNode.Tag = subfolder;
                     node.Nodes.Add(subNode);
                 }
                 foreach (CloudFile file in ((CloudFolder)node.Tag).Files)
                 {
-                    ColumnNode subNode = new ColumnNode(HttpUtility.UrlDecode(file.Name), file.Created, file.Modified, file.Size);
+                    ColumnNode subNode = new ColumnNode(file.Name, file.Created, file.Modified, file.Size);
                     subNode.Tag = file;
                     node.Nodes.Add(subNode);
                     cloudFlatFolder_model.Nodes.Add(new ColumnNode(subNode));
@@ -1323,13 +1325,13 @@ namespace CloudFolderBrowser
             {
                 foreach (LocalFolder subfolder in ((LocalFolder)node.Tag).Subfolders)
                 {
-                    ColumnNode subNode = new ColumnNode(HttpUtility.UrlDecode(subfolder.Name), subfolder.Created, subfolder.Modified, subfolder.Size);
+                    ColumnNode subNode = new ColumnNode(subfolder.Name, subfolder.Created, subfolder.Modified, subfolder.Size);
                     subNode.Tag = subfolder;
                     node.Nodes.Add(subNode);
                 }
                 foreach (FileInfo file in ((LocalFolder)node.Tag).Files)
                 {
-                    ColumnNode subNode = new ColumnNode(HttpUtility.UrlDecode(file.Name), file.CreationTime, file.LastWriteTime, file.Length);
+                    ColumnNode subNode = new ColumnNode(file.Name, file.CreationTime, file.LastWriteTime, file.Length);
                     subNode.Tag = file;
                     node.Nodes.Add(subNode);
                 }

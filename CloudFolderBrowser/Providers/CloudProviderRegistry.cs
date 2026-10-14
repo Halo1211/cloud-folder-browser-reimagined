@@ -333,7 +333,8 @@ public sealed class CloudProviderRegistry
             HealthCheck = healthCheck;
         }
 
-        public bool CanHandle(Uri uri) => _hostPredicate(uri.Host) || _uriPredicate?.Invoke(uri) == true;
+        public bool CanHandle(Uri uri) => uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
+            && (_hostPredicate(uri.Host) || _uriPredicate?.Invoke(uri) == true);
 
         public Task<CloudFolder> LoadAsync(
             CloudProviderLoadContext context,

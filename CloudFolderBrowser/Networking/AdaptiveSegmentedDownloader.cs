@@ -76,6 +76,8 @@ internal sealed class AdaptiveSegmentedDownloader
         ArgumentNullException.ThrowIfNull(requestFactory);
         ArgumentNullException.ThrowIfNull(validateResponse);
         ArgumentNullException.ThrowIfNull(progress);
+        cancellationToken.ThrowIfCancellationRequested();
+        Utility.ValidateFileSystemPath(outputFile);
 
         int segmentCount = CalculateSegmentCount(expectedLength, maximumSegments);
         long existingLength = File.Exists(outputFile) ? new FileInfo(outputFile).Length : 0;
@@ -138,6 +140,7 @@ internal sealed class AdaptiveSegmentedDownloader
         long completedBytes = 0;
         foreach (Segment segment in segments)
         {
+            Utility.ValidateFileSystemPath(segment.Path);
             if (!File.Exists(segment.Path))
                 continue;
             long length = new FileInfo(segment.Path).Length;
@@ -341,6 +344,7 @@ internal sealed class AdaptiveSegmentedDownloader
         Action<int> reportBytes,
         CancellationToken cancellationToken)
     {
+        Utility.ValidateFileSystemPath(segment.Path);
         long existing = File.Exists(segment.Path) ? new FileInfo(segment.Path).Length : 0;
         if (existing == segment.Length)
             return;
@@ -551,6 +555,7 @@ internal sealed class AdaptiveSegmentedDownloader
         long expectedLength,
         CancellationToken cancellationToken)
     {
+        Utility.ValidateFileSystemPath(assemblyPath);
         await using var destination = new FileStream(
             assemblyPath,
             FileMode.Create,
@@ -560,6 +565,7 @@ internal sealed class AdaptiveSegmentedDownloader
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         foreach (Segment segment in segments)
         {
+            Utility.ValidateFileSystemPath(segment.Path);
             await using var source = new FileStream(
                 segment.Path,
                 FileMode.Open,
@@ -685,6 +691,7 @@ internal sealed class AdaptiveSegmentedDownloader
             CancellationToken cancellationToken)
         {
             string path = GetPath(outputFile);
+            Utility.ValidateFileSystemPath(path);
             string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stableIdentity)));
             SegmentManifest? manifest = null;
             if (File.Exists(path))
@@ -786,6 +793,8 @@ internal sealed class AdaptiveSegmentedDownloader
         private async Task SaveCoreAsync(CancellationToken cancellationToken)
         {
             string temp = _path + ".tmp";
+            Utility.ValidateFileSystemPath(_path);
+            Utility.ValidateFileSystemPath(temp);
             await File.WriteAllTextAsync(
                 temp,
                 JsonConvert.SerializeObject(_manifest, Formatting.Indented),

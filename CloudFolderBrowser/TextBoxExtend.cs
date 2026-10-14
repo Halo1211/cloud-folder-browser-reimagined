@@ -11,6 +11,7 @@ namespace CloudFolderBrowser
     public class TextBox : System.Windows.Forms.TextBox
     {
         private readonly System.Timers.Timer timer;
+        private int textChangeVersion;
 
         public TextBox()
         {
@@ -27,13 +28,18 @@ namespace CloudFolderBrowser
 
         private void timer_Elapsed(object? sender, System.Timers.ElapsedEventArgs args)
         {
-            this.timer.Stop();
             if (IsDisposed || Disposing || !IsHandleCreated)
                 return;
 
             try
             {
-                this.BeginInvoke(new MethodInvoker(this.OnTextChangedComplete));
+                int version = Volatile.Read(ref textChangeVersion);
+                this.timer.Stop();
+                this.BeginInvoke(new MethodInvoker(() =>
+                {
+                    if (version == Volatile.Read(ref textChangeVersion))
+                        OnTextChangedComplete();
+                }));
             }
             catch (InvalidOperationException)
             {
@@ -45,11 +51,18 @@ namespace CloudFolderBrowser
 
         protected void OnTextChangedComplete()
         {
-            this.TextChangedComplete?.Invoke(this, EventArgs.Empty);
+            if (!IsDisposed && !Disposing)
+                this.TextChangedComplete?.Invoke(this, EventArgs.Empty);
         }
 
         protected override void OnTextChanged(EventArgs args)
         {
+            Interlocked.Increment(ref textChangeVersion);
+            if (IsDisposed || Disposing)
+            {
+                base.OnTextChanged(args);
+                return;
+            }
             if (!this.timer.Enabled)
                 this.timer.Start();
             else

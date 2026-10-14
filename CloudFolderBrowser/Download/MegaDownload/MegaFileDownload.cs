@@ -60,6 +60,7 @@ namespace CloudFolderBrowser
             var folderPath = Path.GetDirectoryName(SavePath);
             if (string.IsNullOrWhiteSpace(folderPath))
                 throw new InvalidOperationException($"Invalid download path: {SavePath}");
+            Utility.ValidateDownloadTargets(new[] { SavePath });
             Directory.CreateDirectory(folderPath);
             FileInfo file = new FileInfo(SavePath);
 
@@ -103,6 +104,8 @@ namespace CloudFolderBrowser
                 RemainedRetries = maxRetries - attempt;
                 try
                 {
+                    Utility.ValidateFileSystemPath(SavePath);
+                    Utility.ValidateFileSystemPath(partialPath);
                     if (Node is PublicNode)
                         DownloadTask = MegaClient.DownloadFileAsync(Node, partialPath, Progress, ParentDownload.CancellationTokenSource.Token);
                     else
@@ -126,6 +129,7 @@ namespace CloudFolderBrowser
                     }
 
                     File.Move(partialPath, SavePath, true);
+                    Utility.PreserveDownloadedModifiedTime(SavePath, Node.ModificationDate ?? DateTime.MinValue);
                     Progress.Report(100);
                     string postProcessingMessage = string.Empty;
                     if (Properties.Settings.Default.archivePostProcessingEnabled)

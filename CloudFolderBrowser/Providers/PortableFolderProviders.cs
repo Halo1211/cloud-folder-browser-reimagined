@@ -27,7 +27,7 @@ public sealed class YandexPublicFolderProvider : ICloudFolderProviderV2
         "Yadisk", "Yandex Disk", new Uri("https://cloud-api.yandex.net/v1/disk"));
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && (uri.Host.Equals("yadi.sk", StringComparison.OrdinalIgnoreCase)
             || uri.Host.Equals("disk.yandex.com", StringComparison.OrdinalIgnoreCase)
             || uri.Host.EndsWith(".yandex.ru", StringComparison.OrdinalIgnoreCase));
@@ -143,7 +143,7 @@ public sealed class H5AiIndexProvider : ICloudFolderProviderV2
         CloudProviderCapabilities.Browse | CloudProviderCapabilities.DirectDownload;
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && uri.AbsoluteUri.Contains("h5ailink", StringComparison.OrdinalIgnoreCase);
 
     public async Task<CloudFolder> LoadAsync(
@@ -228,7 +228,7 @@ public sealed class H5AiIndexProvider : ICloudFolderProviderV2
                 {
                     Path = WebIndexProviderUtilities.CombineCloudPath(folder.Path, name),
                     PublicUrl = itemUri,
-                    HasKnownSize = size >= 0
+                    HasKnownSize = WebIndexProviderUtilities.IsExactByteCount(cells[3].InnerText)
                 };
                 folder.AddFile(file);
                 folder.SizeTopDirectoryOnly += file.Size;
@@ -254,7 +254,7 @@ public sealed class TheTroveIndexProvider : ICloudFolderProviderV2
         "TheTrove", "The Trove", new Uri("https://thetrove.is/"));
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && uri.Host.Equals("thetrove.is", StringComparison.OrdinalIgnoreCase);
 
     public async Task<CloudFolder> LoadAsync(
@@ -340,7 +340,7 @@ public sealed class TheTroveIndexProvider : ICloudFolderProviderV2
                 {
                     Path = WebIndexProviderUtilities.CombineCloudPath(folder.Path, name),
                     PublicUrl = itemUri,
-                    HasKnownSize = size >= 0
+                    HasKnownSize = WebIndexProviderUtilities.IsExactByteCount(cells[1].InnerText)
                 };
                 folder.AddFile(file);
                 folder.SizeTopDirectoryOnly += file.Size;
@@ -454,13 +454,25 @@ internal static class WebIndexProviderUtilities
     public static string CombineCloudPath(string parentPath, string name)
     {
         string safeName = name.Replace('\\', '_').Replace('/', '_').Trim();
-        return parentPath.TrimEnd('/') + "/" + safeName;
+        return parentPath.TrimEnd('/') + "/" + Uri.EscapeDataString(safeName);
+    }
+
+    public static bool IsExactByteCount(string? size)
+    {
+        string[] parts = HtmlEntity.DeEntitize(size ?? string.Empty).Trim()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length is 1 or 2
+            && (parts.Length == 1 || parts[1].Equals("B", StringComparison.OrdinalIgnoreCase))
+            && long.TryParse(parts[0], NumberStyles.Integer | NumberStyles.AllowThousands,
+                CultureInfo.InvariantCulture, out long bytes) && bytes >= 0;
     }
 
     public static long ParseSizeToBytes(string? size)
     {
         string normalized = HtmlEntity.DeEntitize(size ?? string.Empty).Trim();
         string[] parts = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (IsExactByteCount(normalized))
+            return long.Parse(parts[0], NumberStyles.Integer | NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
         if (parts.Length == 0
             || !double.TryParse(parts[0], NumberStyles.Float | NumberStyles.AllowThousands,
                 CultureInfo.InvariantCulture, out double value)

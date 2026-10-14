@@ -114,7 +114,8 @@ namespace CloudFolderBrowser
             Model = model;
             DownloadBasePathOverride = downloadBasePathOverride;
             AccountStore = cloudAccountStore ?? CloudAccountStore.Default;
-            NetworkCredential = Model.WebdavCredential;
+            NetworkCredential = Model.CloudServiceType is CloudServiceType.Allsync or CloudServiceType.QCloud
+                ? Model.WebdavCredential : null;
             PopulateDownloadRoutes();
             SendMessage(filter_textBox.Handle, 0x1501, 1, "Search missing files by name");
             filter_textBox.TextChangedComplete += filter_TextChangedComplete;

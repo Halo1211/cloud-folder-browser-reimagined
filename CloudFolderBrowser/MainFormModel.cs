@@ -30,6 +30,16 @@ namespace CloudFolderBrowser
 
         public string UserAgent = "";
 
+        internal void UsePortableDownloadContext(CloudFolder folder)
+        {
+            WebdavCredential = folder.DownloadCredential;
+            FlareSolverrSession = folder.DownloadSession;
+            UserAgent = folder.DownloadSession?.UserAgent ?? string.Empty;
+            if (folder.DownloadCredential is { } credential
+                && Uri.TryCreate(folder.OriginalString, UriKind.Absolute, out Uri? source))
+                RememberSharePassword(source, credential.UserName, credential.Password);
+        }
+
         public bool ValidateFileSize = false;       
 
         internal async Task LoadSavedFolderCacheAsync(string fileName)
@@ -48,6 +58,7 @@ namespace CloudFolderBrowser
                     Add(child);
             }
             Add(loadedFolder);
+            UsePortableDownloadContext(loadedFolder);
             CloudPublicFolder = loadedFolder;
             AllFolders = loadedFolders;
             LoadedFromFile = true;

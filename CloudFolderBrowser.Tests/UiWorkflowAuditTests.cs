@@ -57,7 +57,46 @@ public sealed class UiWorkflowAuditTests : IDisposable
         });
     }
 
-    private void RunOnUiThread(Action<SyncFilesForm> check)
+    [Fact]
+    public void OctoberAudit_SyncResultsDoNotReuseShareCredentialsForGenericDownloads()
+    {
+        RunOnUiThread(form => Assert.Null(typeof(SyncFilesForm)
+            .GetField("NetworkCredential", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)),
+            model => model.WebdavCredential = new System.Net.NetworkCredential("old-share", "fixture-password"));
+    }
+
+    [Theory]
+    [InlineData("a+b.bin")]
+    [InlineData("report%20final.bin")]
+    public void OctoberAudit_MainTreeDisplaysLiteralCloudNames(string name)
+    {
+        RunOnUiThread(form =>
+        {
+            var folder = new CloudFolder("root", DateTime.MinValue, DateTime.MinValue, 0);
+            folder.AddFile(new CloudFile(name, DateTime.MinValue, DateTime.MinValue, 1) { Path = "/" + Uri.EscapeDataString(name) });
+            var node = new ColumnNode("root", DateTime.MinValue, DateTime.MinValue, 1) { Tag = folder };
+            form.HostMainForm.cloudFlatFolder_model = new TreeModel();
+            form.HostMainForm.BuildSubfolderNodes(node);
+            Assert.Equal(name, Assert.Single(node.Nodes).Text);
+        });
+    }
+
+    [Fact]
+    public void OctoberAudit_MainTreeDisplaysLiteralLocalNames()
+    {
+        string path = Path.Combine(_root, "local+report%20.bin");
+        File.WriteAllText(path, "fixture");
+        RunOnUiThread(form =>
+        {
+            var folder = new LocalFolder { Name = "root", Path = _root };
+            folder.TryAddScannedFile(new FileInfo(path));
+            var node = new ColumnNode("root", DateTime.MinValue, DateTime.MinValue, 1) { Tag = folder };
+            form.HostMainForm.BuildSubfolderNodes(node);
+            Assert.Equal(Path.GetFileName(path), Assert.Single(node.Nodes).Text);
+        });
+    }
+
+    private void RunOnUiThread(Action<SyncFilesForm> check, Action<MainFormModel>? configure = null)
     {
         ExceptionDispatchInfo? failure = null;
         var thread = new Thread(() =>
@@ -73,6 +112,7 @@ public sealed class UiWorkflowAuditTests : IDisposable
                 root.CalculateFolderSize();
                 var model = new MainFormModel { CloudServiceType = CloudServiceType.Other, CloudPublicFolder = root,
                     AllFolders = new() { root } };
+                configure?.Invoke(model);
                 using var parent = new MainForm();
                 using var form = new SyncFilesForm(parent, root, model, _root,
                     new CloudAccountStore(Path.Combine(_root, "accounts.json")));

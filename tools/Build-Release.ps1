@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [string]$ExpectedVersion = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,9 @@ $version = ([string]$versionPropertyGroup.Version).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
     throw "The project version '$version' is not a three-part semantic version."
 }
+if ($ExpectedVersion -and $ExpectedVersion -cne $version) {
+    throw "Release tag version '$ExpectedVersion' does not match project version '$version'."
+}
 
 $changelog = Get-Content -LiteralPath (Join-Path $repositoryRoot 'CHANGELOG.md') -Raw
 $notesPattern = '(?ms)^## \[' + [regex]::Escape($version) + '\][^\r\n]*\r?\n(?<notes>.*?)(?=^## \[|\z)'
@@ -33,7 +37,7 @@ if (-not $releaseNotes.Success) {
 
 [System.IO.Directory]::CreateDirectory($releaseDirectory) | Out-Null
 Get-ChildItem -LiteralPath $releaseDirectory -Force |
-    Where-Object Name -ne 'README.md' |
+    Where-Object Name -notin @('README.md', 'portable.config') |
     Remove-Item -Recurse -Force
 
 foreach ($path in @($buildDirectory, $packageDirectory)) {

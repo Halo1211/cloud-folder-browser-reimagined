@@ -26,7 +26,10 @@ internal static class SavedFolderCache
         {
             CloudFolder folder = pending.Pop();
             if (!visited.Add(folder) || folder.Files == null || folder.Subfolders == null
-                || folder.Files.Any(file => file == null))
+                || folder.Name == null || string.IsNullOrWhiteSpace(folder.Path)
+                || folder.Size < 0 || folder.SizeTopDirectoryOnly < 0
+                || folder.Files.Any(file => file == null || string.IsNullOrWhiteSpace(file.Name)
+                    || string.IsNullOrWhiteSpace(file.Path) || file.Size < 0))
                 throw new JsonSerializationException("Saved folder data contains an invalid folder tree.");
             foreach (IFolder? child in folder.Subfolders)
             {

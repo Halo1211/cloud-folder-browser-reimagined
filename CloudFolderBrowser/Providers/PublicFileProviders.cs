@@ -90,7 +90,7 @@ public abstract class PublicFileProviderBase : ICloudFolderProvider, ICloudFolde
         };
         var file = new CloudFile(name, DateTime.MinValue, DateTime.MinValue, Math.Max(0, size))
         {
-            Path = "/" + name,
+            Path = "/" + Uri.EscapeDataString(name),
             PublicUrl = downloadUri,
             HasKnownSize = hasKnownSize
         };
@@ -255,7 +255,7 @@ public sealed class TeraBoxPublicShareProvider : ICloudFolderProvider, ICloudFol
         "TeraBox", "TeraBox", new Uri("https://www.terabox.com/"));
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && SupportedHosts.Any(host => uri.Host.Equals(host, StringComparison.OrdinalIgnoreCase)
             || uri.Host.EndsWith("." + host, StringComparison.OrdinalIgnoreCase));
 
@@ -301,7 +301,7 @@ public sealed class GenericHttpFileProvider : PublicFileProviderBase
     public override string DisplayName => "Web link";
     public override CloudServiceType ServiceType => CloudServiceType.Other;
 
-    public override bool CanHandle(Uri uri) => uri.Scheme is "http" or "https";
+    public override bool CanHandle(Uri uri) => uri.IsAbsoluteUri && uri.Scheme is "http" or "https";
 
     public override Uri GetDownloadUri(Uri source) => source;
 

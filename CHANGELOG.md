@@ -2,6 +2,34 @@
 
 All notable changes to Cloud Folder Browser Reimagined are documented here.
 
+## [1.0.4] - 2026-10-14
+
+### Fixed
+
+- Encrypt and scope portable AllSync credentials, pass authentication context
+  to downloads, and prevent reuse of a previous share's credentials.
+- Handle absolute WebDAV hrefs, distinct folder case, and empty AllSync shares.
+- Distinguish rounded web-index sizes from exact lengths and preserve large
+  integer byte counts and literal percent characters in generated paths.
+- Recover stale unknown-size partial downloads after HTTP 416, accept chunked
+  downloads with estimated sizes, and preserve remote modification times.
+- Reject unsafe explicit Windows targets and existing download-path reparse
+  points, and validate saved-folder metadata before replacing the current tree.
+- Keep search callbacks consistent with control lifetime and the latest edit;
+  display cloud/local names containing `+` and `%` literally.
+
+### Verification
+
+- 469 passing tests, including 44 additional regression cases.
+- Release build with warnings treated as errors.
+
+### Changed
+
+- Update GitHub Actions to Node.js 24 versions and reject release tags that do
+  not match the application version.
+- Preserve local portable settings when rebuilding release packages.
+- Simplify the English documentation and clarify supported sources and limits.
+
 ## [1.0.3] - 2026-10-01
 
 ### Fixed
@@ -31,8 +59,7 @@ All notable changes to Cloud Folder Browser Reimagined are documented here.
 - Encrypt and scope saved share passwords while keeping encrypted backups
   portable across Windows users.
 - Expand the automated regression suite from 150 to 425 tests.
-- Publish English audit documentation and exclude local/generated data from
-  GitHub source archives.
+- Exclude local and generated data from source archives.
 
 ### Verification
 
@@ -42,7 +69,7 @@ All notable changes to Cloud Folder Browser Reimagined are documented here.
 - UI snapshots inspected for the main window, sync preview, and download history.
 
 Live OAuth/cloud providers and optional external tools were not all tested
-end-to-end. See the audit reports for the full verification scope and limits.
+end-to-end. See [testing and known limits](docs/testing.md) for validation scope.
 
 ## [1.0.2] - 2026-09-23
 

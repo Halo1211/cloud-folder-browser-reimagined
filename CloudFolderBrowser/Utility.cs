@@ -53,7 +53,17 @@ namespace CloudFolderBrowser
             var artifacts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string path in paths)
             {
+                ValidateFileSystemPath(path);
                 string target = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                foreach (string suffix in new[] { ".part", ".part.assembling", ".part.segments.json", ".part.segments.json.tmp" })
+                    ValidateFileSystemPath(target + suffix);
+                string? directory = Path.GetDirectoryName(target);
+                if (directory != null && Directory.Exists(directory))
+                {
+                    foreach (string segment in Directory.EnumerateFiles(directory,
+                        Path.GetFileName(target) + ".part.segment.*", SearchOption.TopDirectoryOnly))
+                        ValidateFileSystemPath(segment);
+                }
                 if (!targets.Add(target))
                     throw new InvalidDataException($"Multiple files map to the same download path: {target}");
                 artifacts.Add(target + ".part");
@@ -77,6 +87,45 @@ namespace CloudFolderBrowser
                     index = ~index;
                 if (index < orderedTargets.Length && orderedTargets[index].StartsWith(segmentPrefix, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException($"Download path overlaps segment transfer data: {orderedTargets[index]}");
+            }
+        }
+
+        internal static void ValidateFileSystemPath(string path)
+        {
+            string inputRoot = Path.GetPathRoot(path) ?? string.Empty;
+            foreach (string component in path[inputRoot.Length..]
+                .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (component is not "." and not ".." && component != GetSafePathName(component))
+                    throw new InvalidDataException("Download target contains an unsafe Windows path component.");
+            }
+            string fullPath = Path.GetFullPath(path);
+            string root = Path.GetPathRoot(fullPath)!;
+            foreach (string component in fullPath[root.Length..]
+                .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (component != GetSafePathName(component))
+                    throw new InvalidDataException("Download target contains an unsafe Windows path component.");
+            }
+            for (string? current = fullPath; current != null; current = Path.GetDirectoryName(current))
+            {
+                try
+                {
+                    if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+                        throw new InvalidDataException("Download targets cannot traverse a junction or symbolic link.");
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
+            }
+        }
+
+        internal static void PreserveDownloadedModifiedTime(string path, DateTime modified)
+        {
+            if (modified == DateTime.MinValue)
+                return;
+            try { File.SetLastWriteTimeUtc(path, modified.ToUniversalTime()); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentOutOfRangeException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Unable to preserve downloaded file timestamp: {ex.Message}");
             }
         }
 

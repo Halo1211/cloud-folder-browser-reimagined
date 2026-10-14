@@ -1,8 +1,10 @@
-https://github.com/gpailler/MegaApiClient
+# MegaApiClient
 
-MegaApiClient
-=============
-**MegaApiClient is a C# .Net library to access [http://mega.co.nz](http://mega.co.nz) / [http://mega.nz](http://mega.nz) cloud storage and file hosting service.**
+Vendored C# client for MEGA, adapted for Cloud Folder Browser Reimagined.
 
-Whole documentation is available on [https://gpailler.github.io/MegaApiClient/](https://gpailler.github.io/MegaApiClient/)
+Upstream: [gpailler/MegaApiClient](https://github.com/gpailler/MegaApiClient).
+Upstream documentation: [MegaApiClient documentation](https://gpailler.github.io/MegaApiClient/).
+
+This copy includes local fixes for shared-node handling and integration with the
+application's download and network configuration.
 

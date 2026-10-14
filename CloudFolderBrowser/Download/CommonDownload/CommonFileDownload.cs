@@ -85,6 +85,7 @@ namespace CloudFolderBrowser
             if (string.IsNullOrWhiteSpace(directory))
                 throw new InvalidOperationException($"Invalid download path: {SavePath}");
 
+            Utility.ValidateDownloadTargets(new[] { SavePath });
             Directory.CreateDirectory(directory);
             SanitizeSavePath();
 
@@ -151,6 +152,7 @@ namespace CloudFolderBrowser
                     }
 
                     File.Move(partialPath, SavePath, true);
+                    Utility.PreserveDownloadedModifiedTime(SavePath, FileInfo.Modified);
                     AdaptiveSegmentedDownloader.DeleteSegmentArtifacts(partialPath);
                     if (ParentDownload.LinkResolver is IAutomaticDownloadLinkResolver automaticResolver)
                         automaticResolver.ReportSuccess(FileInfo, sourceUri);
@@ -348,6 +350,8 @@ namespace CloudFolderBrowser
             CancellationToken cancellationToken,
             Action<long, long> progressCallback)
         {
+            Utility.ValidateFileSystemPath(SavePath);
+            Utility.ValidateFileSystemPath(outputFile);
             var existingLength = File.Exists(outputFile) ? new FileInfo(outputFile).Length : 0;
             if (FileInfo.HasKnownSize && existingLength > FileInfo.Size)
             {
@@ -417,6 +421,22 @@ namespace CloudFolderBrowser
             using (response)
             {
                 if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable
+                    && existingLength > 0 && !FileInfo.HasKnownSize
+                    && response.Content.Headers.ContentRange is { HasRange: false, Length: >= 0 } staleRange
+                    && string.Equals(staleRange.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
+                    && staleRange.Length < existingLength)
+                {
+                    // The old prefix is longer than the current representation.
+                    // Restart once without a Range header; the empty partial file
+                    // makes this fallback ineligible on the next call.
+                    response.Dispose();
+                    File.Delete(outputFile);
+                    _expectedRemoteChecksum = null;
+                    await DownloadFileAsync(downloadUri, stableIdentity, outputFile,
+                        cancellationToken, progressCallback).ConfigureAwait(false);
+                    return;
+                }
+                if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable
                     && existingLength > 0
                     && response.Content.Headers.ContentRange is { HasRange: false } completeRange
                     && string.Equals(completeRange.Unit, "bytes", StringComparison.OrdinalIgnoreCase)
@@ -482,7 +502,7 @@ namespace CloudFolderBrowser
                 var responseTotal = range?.Length
                     ?? (response.Content.Headers.ContentLength.HasValue
                         ? existingLength + response.Content.Headers.ContentLength.Value
-                        : FileInfo.Size);
+                        : FileInfo.HasKnownSize ? FileInfo.Size : 0);
 
                 if (FileInfo.HasKnownSize && responseTotal != FileInfo.Size)
                     throw new InvalidDataException($"Server reports {responseTotal} bytes, expected {FileInfo.Size} bytes.");
@@ -537,7 +557,7 @@ namespace CloudFolderBrowser
                 await source.DisposeAsync().ConfigureAwait(false);
                 await destination.DisposeAsync().ConfigureAwait(false);
 
-                if (responseTotal > 0 && totalRead != responseTotal)
+                if (FileInfo.HasKnownSize && totalRead != responseTotal)
                 {
                     throw new InvalidDataException(
                         $"Connection ended early: received {totalRead} of {responseTotal} bytes.");

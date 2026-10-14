@@ -2,6 +2,7 @@ using System.Net;
 using System.Web;
 using CloudFolderBrowser.Networking;
 using Newtonsoft.Json;
+using System.Security.Cryptography;
 using WebDAVClient;
 
 namespace CloudFolderBrowser.Providers;
@@ -42,7 +43,7 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
         "Allsync", "AllSync", new Uri("https://allsync.com/"));
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && (uri.Host.Equals("allsync.com", StringComparison.OrdinalIgnoreCase)
             || uri.Host.EndsWith(".allsync.com", StringComparison.OrdinalIgnoreCase));
 
@@ -56,7 +57,8 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
         CloudflareSession? cloudflare = await CreateCloudflareSessionAsync(
             share.Source, cancellationToken).ConfigureAwait(false);
         Dictionary<string, string> passwords = _loadPasswords();
-        passwords.TryGetValue(share.ShareId, out string? password);
+        string credentialScope = ShareCredentialCacheCodec.GetScopeKey(share.Source, share.ShareId);
+        passwords.TryGetValue(credentialScope, out string? password);
         password ??= string.Empty;
         int attempt = 0;
 
@@ -69,16 +71,15 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
                 WebDAVClient.Model.Item[] items = (await client.ListShared(share.RequestedPath, 999)
                     .ConfigureAwait(false))?.ToArray() ?? Array.Empty<WebDAVClient.Model.Item>();
                 cancellationToken.ThrowIfCancellationRequested();
-                if (items.Length == 0)
-                    throw new InvalidDataException("The AllSync share returned no files or folders.");
-
                 if (!string.IsNullOrEmpty(password))
                 {
-                    passwords[share.ShareId] = password;
+                    passwords[credentialScope] = password;
                     _savePasswords(passwords);
                 }
                 progress?.Report(1);
                 CloudFolder root = BuildTree(share, items);
+                root.DownloadCredential = client.Credentials;
+                root.DownloadSession = cloudflare;
                 root.CalculateFolderSize();
                 progress?.Report(2);
                 return root;
@@ -172,14 +173,17 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
             OriginalString = share.Source.AbsoluteUri,
             PublicKey = share.ShareId
         };
-        var folders = new Dictionary<string, CloudFolder>(StringComparer.OrdinalIgnoreCase)
+        var folders = new Dictionary<string, CloudFolder>(StringComparer.Ordinal)
         {
             [NormalizeFolderPath(root.Path)] = root
         };
 
         foreach (WebDAVClient.Model.Item item in items.Where(item => item.IsCollection))
         {
-            string path = NormalizeFolderPath(DecodeItemPath(item.Href));
+            string? decodedPath = DecodeItemPath(share, item.Href);
+            if (decodedPath == null)
+                continue;
+            string path = NormalizeFolderPath(decodedPath);
             if (path == root.Path || folders.ContainsKey(path))
                 continue;
             folders[path] = new CloudFolder(
@@ -199,12 +203,13 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
 
         foreach (WebDAVClient.Model.Item item in items.Where(item => !item.IsCollection))
         {
-            string path = DecodeItemPath(item.Href);
+            string? path = DecodeItemPath(share, item.Href);
+            if (path == null)
+                continue;
             string parentPath = ParentPath(path);
             if (!folders.TryGetValue(parentPath, out CloudFolder? parent))
                 continue;
-            string encodedPath = item.Href.Replace("/public.php/webdav", "/download?path=", StringComparison.OrdinalIgnoreCase);
-            string directUrl = $"{share.Authority}/s/{Uri.EscapeDataString(share.ShareId)}{encodedPath}";
+            string directUrl = $"{share.Authority}/s/{Uri.EscapeDataString(share.ShareId)}/download?path={Uri.EscapeDataString(path)}";
             var file = new CloudFile(
                 Utility.GetSafePathName(item.DisplayName),
                 DateTime.MinValue,
@@ -221,9 +226,15 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
         return root;
     }
 
-    private static string DecodeItemPath(string href) =>
-        Uri.UnescapeDataString(href).Replace("/public.php/webdav", "", StringComparison.OrdinalIgnoreCase)
-            .Replace('\\', '/');
+    private static string? DecodeItemPath(ShareAddress share, string href)
+    {
+        var davRoot = new Uri(share.Authority + "/public.php/webdav/");
+        if (!Uri.TryCreate(davRoot, href, out Uri? uri)
+            || !uri.GetLeftPart(UriPartial.Authority).Equals(share.Authority, StringComparison.OrdinalIgnoreCase)
+            || !uri.AbsolutePath.StartsWith(davRoot.AbsolutePath, StringComparison.Ordinal))
+            return null;
+        return "/" + Uri.UnescapeDataString(uri.AbsolutePath[davRoot.AbsolutePath.Length..]);
+    }
 
     private static string NormalizeFolderPath(string path) =>
         "/" + path.Trim('/').Trim() + (path.Trim('/').Length == 0 ? string.Empty : "/");
@@ -239,11 +250,9 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
     {
         try
         {
-            return JsonConvert.DeserializeObject<Dictionary<string, string>>(
-                Properties.Settings.Default.savedPasswordsJson ?? string.Empty)
-                ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            return ShareCredentialCacheCodec.Deserialize(Properties.Settings.Default.savedPasswordsJson);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or CryptographicException or FormatException)
         {
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
@@ -251,7 +260,7 @@ public sealed class AllsyncPublicShareProvider : ICloudFolderProviderV2
 
     private static void SavePasswords(Dictionary<string, string> passwords)
     {
-        Properties.Settings.Default.savedPasswordsJson = JsonConvert.SerializeObject(passwords);
+        Properties.Settings.Default.savedPasswordsJson = ShareCredentialCacheCodec.Serialize(passwords);
         Properties.Settings.Default.Save();
     }
 

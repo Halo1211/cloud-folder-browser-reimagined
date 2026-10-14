@@ -21,7 +21,7 @@ public sealed class MegaPublicFolderProvider : ICloudFolderProviderV2
         "Mega", "MEGA", new Uri("https://g.api.mega.co.nz/"));
 
     public bool CanHandle(Uri uri) =>
-        uri.Scheme is "http" or "https"
+        uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
         && (uri.Host.Equals("mega.nz", StringComparison.OrdinalIgnoreCase)
             || uri.Host.EndsWith(".mega.nz", StringComparison.OrdinalIgnoreCase));
 

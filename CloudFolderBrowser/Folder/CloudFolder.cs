@@ -23,6 +23,12 @@ namespace CloudFolderBrowser
 
         public string OriginalString { get; set; }
 
+        [JsonIgnore]
+        internal System.Net.NetworkCredential? DownloadCredential { get; set; }
+
+        [JsonIgnore]
+        internal Networking.CloudflareSession? DownloadSession { get; set; }
+
         public CloudFolder(ResourceList rl)
         {
             PublicKey = rl.PublicKey;
